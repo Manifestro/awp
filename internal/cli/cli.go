@@ -19,7 +19,7 @@ import (
 	"github.com/Manifestro/awp/internal/sessions"
 )
 
-const Version = "0.1.0-dev"
+var Version = "0.1.0-dev"
 
 type result struct {
 	OK      bool        `json:"ok"`

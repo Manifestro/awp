@@ -97,6 +97,7 @@ Example with Sinores:
 | [JSON messages](./docs/examples) | Current protocol examples |
 | [Conceptual draft](./AWP.md) | Roles, provider-owned endpoint model, and design direction |
 | [FastAPI example](./example/backend) | Local example of one provider's AWP endpoint |
+| [Release and installer hosting](./docs/RELEASING.md) | GitHub Releases, Pages, DNS, and `awp.manifestro.io` setup |
 
 ## Current implementation
 
@@ -120,6 +121,30 @@ Not implemented yet:
 - formal JSON Schemas and conformance suite;
 - a standardized MCP-to-AWP association operation;
 - stable pairing, credential issuance, and subscription APIs.
+
+## Install
+
+On macOS or Linux:
+
+```bash
+curl -LsSf https://awp.manifestro.io/install.sh | sh
+```
+
+The installer:
+
+- detects `darwin`/`linux` and `amd64`/`arm64`;
+- downloads the latest binary from [GitHub Releases](https://github.com/Manifestro/awp/releases);
+- verifies the release SHA-256 checksum before extraction;
+- installs to `$HOME/.local/bin/awp` without `sudo`.
+
+Install a specific version or directory:
+
+```bash
+curl -LsSf https://awp.manifestro.io/install.sh | \
+  AWP_VERSION=0.1.0-alpha.1 AWP_INSTALL_DIR=/usr/local/bin sh
+```
+
+If the chosen directory requires elevated permissions, create it and grant access separately; the installer never invokes `sudo` itself.
 
 ## Build
 
