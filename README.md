@@ -180,6 +180,21 @@ AWP complements MCP rather than replacing it:
 
 The conceptual draft is being developed in [AWP.md](./AWP.md). The first client/server wire format and ready-to-use JSON fixtures are documented in [docs/PROTOCOL.md](./docs/PROTOCOL.md) and [`docs/examples`](./docs/examples) in the canonical [Manifestro/awp](https://github.com/Manifestro/awp) repository.
 
+An early Go client foundation is also available. Its configuration commands are non-interactive and support stable JSON output so coding agents can configure and inspect the client directly:
+
+```bash
+awp config set \
+  --service-url wss://awp.example.com/ws \
+  --device-id dev_macbook_01 \
+  --token-env AWP_TOKEN \
+  --json
+
+awp config show --json
+awp doctor --json
+```
+
+The bearer token is not written to the configuration file. `token_env` contains only the name of the environment variable that holds it.
+
 The main open design questions are:
 
 - how an event securely identifies its target client and session;
