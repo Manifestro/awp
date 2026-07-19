@@ -224,6 +224,7 @@ go build -o ./bin/awp ./cmd/awp
 
 | Document | Contents |
 | --- | --- |
+| [Provider quickstart](./docs/PROVIDER_QUICKSTART.md) | Website-ready guide for adding AWP to an existing backend |
 | [Protocol specification](./docs/PROTOCOL.md) | AWP `0.1` envelope, handshake, binding, delivery, ACKs, errors, and heartbeat |
 | [Backend implementation guide](./docs/HOW_TO_CREATE_AWP_BACKEND.md) | Authentication, persistence, routing, retry, security, and production requirements |
 | [JSON examples](./docs/examples) | Complete protocol messages for client and provider implementations |
