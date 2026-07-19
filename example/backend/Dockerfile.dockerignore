@@ -1,0 +1,4 @@
+.git
+example/backend/.venv
+**/__pycache__
+**/*.pyc

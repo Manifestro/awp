@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -9,7 +11,9 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/Manifestro/awp/internal/client"
 	"github.com/Manifestro/awp/internal/config"
+	"github.com/Manifestro/awp/internal/protocol"
 )
 
 const Version = "0.1.0-dev"
@@ -48,11 +52,78 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runConfig(args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr)
+	case "connect":
+		return runConnect(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 		printUsage(stderr)
 		return 2
 	}
+}
+
+func runConnect(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("connect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "", "config file path")
+	jsonOutput := flags.Bool("json", false, "print received messages as JSON Lines")
+	once := flags.Bool("once", false, "exit after acknowledging one event.deliver message")
+	timeout := flags.Duration("timeout", 0, "optional connection timeout, for example 30s")
+	sessionID := flags.String("session-id", "", "AWP session binding to register after connecting")
+	adapter := flags.String("adapter", "codex", "runtime adapter for the session binding")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	path, err := config.Path(*configPath)
+	if err != nil {
+		return commandError("connect", "config_path", err, *jsonOutput, stdout, stderr)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return commandError("connect", "config_read", err, *jsonOutput, stdout, stderr)
+	}
+	if err := config.Validate(cfg); err != nil {
+		return commandError("connect", "invalid_config", err, *jsonOutput, stdout, stderr)
+	}
+	if *sessionID != "" && *adapter == "" {
+		return commandError("connect", "adapter_required", errors.New("--adapter is required with --session-id"), *jsonOutput, stdout, stderr)
+	}
+	token := os.Getenv(cfg.TokenEnv)
+	if token == "" {
+		return commandError("connect", "token_missing", fmt.Errorf("%s is not set", cfg.TokenEnv), *jsonOutput, stdout, stderr)
+	}
+
+	ctx := context.Background()
+	if *timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *timeout)
+		defer cancel()
+	}
+
+	receive := func(message protocol.Message) error {
+		if *jsonOutput {
+			return json.NewEncoder(stdout).Encode(message)
+		}
+		fmt.Fprintf(stdout, "received %-18s id=%s\n", message.Action, message.ID)
+		return nil
+	}
+	err = client.Run(ctx, client.Options{
+		Config:    cfg,
+		Token:     token,
+		Version:   Version,
+		SessionID: *sessionID,
+		Adapter:   *adapter,
+		Once:      *once,
+		Receive:   receive,
+	})
+	if err != nil {
+		code := "connection_failed"
+		if errors.Is(err, context.DeadlineExceeded) {
+			code = "timeout"
+		}
+		return commandError("connect", code, err, *jsonOutput, stdout, stderr)
+	}
+	return 0
 }
 
 func runVersion(args []string, stdout, stderr io.Writer) int {
@@ -242,6 +313,7 @@ Usage:
   awp config set --service-url <wss://...> --device-id <id> [--token-env AWP_TOKEN] [--config <path>] [--json]
   awp config show [--config <path>] [--json]
   awp doctor [--config <path>] [--json]
+  awp connect [--config <path>] [--session-id <id>] [--adapter codex] [--once] [--timeout 30s] [--json]
 
 Environment:
   AWP_CONFIG  Override the default configuration path.

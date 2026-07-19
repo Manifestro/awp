@@ -1,0 +1,10 @@
+services:
+  backend:
+    build:
+      context: ../..
+      dockerfile: example/backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      AWP_TOKEN: ${AWP_TOKEN:-local-dev-token}
+    restart: unless-stopped

@@ -191,6 +191,14 @@ awp config set \
 
 awp config show --json
 awp doctor --json
+
+# Connect, acknowledge one delivered event, and exit.
+awp connect \
+  --session-id ses_01JABC123 \
+  --adapter codex \
+  --once \
+  --timeout 30s \
+  --json
 ```
 
 The bearer token is not written to the configuration file. `token_env` contains only the name of the environment variable that holds it.

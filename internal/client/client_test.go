@@ -1,0 +1,130 @@
+package client
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/Manifestro/awp/internal/config"
+	"github.com/Manifestro/awp/internal/protocol"
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
+)
+
+func TestRunHandshakeDeliveryAndAck(t *testing.T) {
+	acknowledgement := make(chan protocol.Message, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer connection.CloseNow()
+
+		var hello protocol.Message
+		if err := wsjson.Read(request.Context(), connection, &hello); err != nil {
+			t.Error(err)
+			return
+		}
+		if hello.Action != protocol.ActionClientHello {
+			t.Errorf("first action = %q, want client.hello", hello.Action)
+			return
+		}
+
+		welcome := mustMessage(t, protocol.ActionServerWelcome, map[string]any{"device_id": "dev_test"})
+		if err := wsjson.Write(request.Context(), connection, welcome); err != nil {
+			t.Error(err)
+			return
+		}
+		ping := mustMessage(t, protocol.ActionHeartbeatPing, map[string]any{})
+		if err := wsjson.Write(request.Context(), connection, ping); err != nil {
+			t.Error(err)
+			return
+		}
+		var pong protocol.Message
+		if err := wsjson.Read(request.Context(), connection, &pong); err != nil {
+			t.Error(err)
+			return
+		}
+		if pong.Action != protocol.ActionHeartbeatPong {
+			t.Errorf("heartbeat response = %q, want heartbeat.pong", pong.Action)
+			return
+		}
+		pongData, err := protocol.DecodeData[protocol.PongData](pong)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if pongData.ReplyTo != ping.ID {
+			t.Errorf("heartbeat reply_to = %q, want %q", pongData.ReplyTo, ping.ID)
+			return
+		}
+		delivery := mustMessage(t, protocol.ActionEventDeliver, protocol.DeliveryData{
+			DeliveryID: "dlv_test",
+			EventID:    "evt_test",
+			Target:     json.RawMessage(`{"session_id":"ses_test"}`),
+			Event:      json.RawMessage(`{"source":"test","name":"test.event","data":{}}`),
+			Attempt:    1,
+		})
+		if err := wsjson.Write(request.Context(), connection, delivery); err != nil {
+			t.Error(err)
+			return
+		}
+
+		var ack protocol.Message
+		if err := wsjson.Read(request.Context(), connection, &ack); err != nil {
+			t.Error(err)
+			return
+		}
+		acknowledgement <- ack
+	}))
+	defer server.Close()
+
+	serviceURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	received := make([]string, 0, 2)
+	err := Run(context.Background(), Options{
+		Config: config.Config{
+			Version:    "0.1",
+			ServiceURL: serviceURL,
+			DeviceID:   "dev_test",
+			TokenEnv:   "AWP_TOKEN",
+		},
+		Token:   "test-token",
+		Version: "test",
+		Once:    true,
+		Receive: func(message protocol.Message) error {
+			received = append(received, message.Action)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(received) != 2 || received[0] != protocol.ActionServerWelcome || received[1] != protocol.ActionEventDeliver {
+		t.Fatalf("received actions = %#v", received)
+	}
+
+	ack := <-acknowledgement
+	if ack.Action != protocol.ActionEventAck {
+		t.Fatalf("ack action = %q", ack.Action)
+	}
+	data, err := protocol.DecodeData[protocol.AckData](ack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.DeliveryID != "dlv_test" || data.EventID != "evt_test" || data.Status != "accepted" {
+		t.Fatalf("ack data = %#v", data)
+	}
+}
+
+func mustMessage(t *testing.T, action string, data any) protocol.Message {
+	t.Helper()
+	message, err := protocol.New(action, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return message
+}
