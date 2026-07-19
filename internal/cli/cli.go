@@ -11,9 +11,11 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/Manifestro/awp/internal/adapters"
 	"github.com/Manifestro/awp/internal/client"
 	"github.com/Manifestro/awp/internal/config"
 	"github.com/Manifestro/awp/internal/protocol"
+	"github.com/Manifestro/awp/internal/sessions"
 )
 
 const Version = "0.1.0-dev"
@@ -54,6 +56,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runDoctor(args[1:], stdout, stderr)
 	case "connect":
 		return runConnect(args[1:], stdout, stderr)
+	case "sessions":
+		return runSessions(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 		printUsage(stderr)
@@ -69,7 +73,7 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	once := flags.Bool("once", false, "exit after acknowledging one event.deliver message")
 	timeout := flags.Duration("timeout", 0, "optional connection timeout, for example 30s")
 	sessionID := flags.String("session-id", "", "AWP session binding to register after connecting")
-	adapter := flags.String("adapter", "codex", "runtime adapter for the session binding")
+	storePath := flags.String("store", "", "session registry file path")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -84,9 +88,6 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	}
 	if err := config.Validate(cfg); err != nil {
 		return commandError("connect", "invalid_config", err, *jsonOutput, stdout, stderr)
-	}
-	if *sessionID != "" && *adapter == "" {
-		return commandError("connect", "adapter_required", errors.New("--adapter is required with --session-id"), *jsonOutput, stdout, stderr)
 	}
 	token := os.Getenv(cfg.TokenEnv)
 	if token == "" {
@@ -107,14 +108,39 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "received %-18s id=%s\n", message.Action, message.ID)
 		return nil
 	}
+	var adapterName string
+	var handle func(context.Context, protocol.DeliveryData) error
+	if *sessionID != "" {
+		registryPath, err := sessions.Path(*configPath, *storePath)
+		if err != nil {
+			return commandError("connect", "registry_path", err, *jsonOutput, stdout, stderr)
+		}
+		registry, err := sessions.Load(registryPath)
+		if err != nil {
+			return commandError("connect", "registry_read", err, *jsonOutput, stdout, stderr)
+		}
+		binding, found := sessions.Get(registry, *sessionID)
+		if !found {
+			return commandError("connect", "session_not_bound", fmt.Errorf("AWP session %s is not bound locally", *sessionID), *jsonOutput, stdout, stderr)
+		}
+		resolved, err := adapters.Resolve(binding, stderr)
+		if err != nil {
+			return commandError("connect", "adapter_unavailable", err, *jsonOutput, stdout, stderr)
+		}
+		adapterName = binding.Adapter
+		handle = func(ctx context.Context, delivery protocol.DeliveryData) error {
+			return resolved.Run(ctx, binding, delivery)
+		}
+	}
 	err = client.Run(ctx, client.Options{
 		Config:    cfg,
 		Token:     token,
 		Version:   Version,
 		SessionID: *sessionID,
-		Adapter:   *adapter,
+		Adapter:   adapterName,
 		Once:      *once,
 		Receive:   receive,
+		Handle:    handle,
 	})
 	if err != nil {
 		code := "connection_failed"
@@ -313,10 +339,14 @@ Usage:
   awp config set --service-url <wss://...> --device-id <id> [--token-env AWP_TOKEN] [--config <path>] [--json]
   awp config show [--config <path>] [--json]
   awp doctor [--config <path>] [--json]
-  awp connect [--config <path>] [--session-id <id>] [--adapter codex] [--once] [--timeout 30s] [--json]
+  awp sessions bind --session-id <id> --adapter codex --runtime-session-id <id> [--workspace <path>] [--json]
+  awp sessions list [--json]
+  awp sessions remove --session-id <id> [--json]
+  awp connect [--config <path>] [--session-id <id>] [--store <path>] [--once] [--timeout 30s] [--json]
 
 Environment:
   AWP_CONFIG  Override the default configuration path.
+  AWP_SESSIONS Override the default session registry path.
   AWP_TOKEN   Default bearer token environment variable.
 `)+"\n")
 }

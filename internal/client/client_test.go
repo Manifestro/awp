@@ -39,6 +39,20 @@ func TestRunHandshakeDeliveryAndAck(t *testing.T) {
 			t.Error(err)
 			return
 		}
+		var bind protocol.Message
+		if err := wsjson.Read(request.Context(), connection, &bind); err != nil {
+			t.Error(err)
+			return
+		}
+		if bind.Action != protocol.ActionSessionBind {
+			t.Errorf("binding action = %q, want session.bind", bind.Action)
+			return
+		}
+		bound := mustMessage(t, protocol.ActionSessionBound, map[string]any{"session_id": "ses_test", "status": "active"})
+		if err := wsjson.Write(request.Context(), connection, bound); err != nil {
+			t.Error(err)
+			return
+		}
 		ping := mustMessage(t, protocol.ActionHeartbeatPing, map[string]any{})
 		if err := wsjson.Write(request.Context(), connection, ping); err != nil {
 			t.Error(err)
@@ -65,7 +79,7 @@ func TestRunHandshakeDeliveryAndAck(t *testing.T) {
 		delivery := mustMessage(t, protocol.ActionEventDeliver, protocol.DeliveryData{
 			DeliveryID: "dlv_test",
 			EventID:    "evt_test",
-			Target:     json.RawMessage(`{"session_id":"ses_test"}`),
+			Target:     json.RawMessage(`{"device_id":"dev_test","session_id":"ses_test"}`),
 			Event:      json.RawMessage(`{"source":"test","name":"test.event","data":{}}`),
 			Attempt:    1,
 		})
@@ -92,18 +106,21 @@ func TestRunHandshakeDeliveryAndAck(t *testing.T) {
 			DeviceID:   "dev_test",
 			TokenEnv:   "AWP_TOKEN",
 		},
-		Token:   "test-token",
-		Version: "test",
-		Once:    true,
+		Token:     "test-token",
+		Version:   "test",
+		SessionID: "ses_test",
+		Adapter:   "codex",
+		Once:      true,
 		Receive: func(message protocol.Message) error {
 			received = append(received, message.Action)
 			return nil
 		},
+		Handle: func(_ context.Context, _ protocol.DeliveryData) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if len(received) != 2 || received[0] != protocol.ActionServerWelcome || received[1] != protocol.ActionEventDeliver {
+	if len(received) != 3 || received[0] != protocol.ActionServerWelcome || received[1] != protocol.ActionSessionBound || received[2] != protocol.ActionEventDeliver {
 		t.Fatalf("received actions = %#v", received)
 	}
 
@@ -115,7 +132,7 @@ func TestRunHandshakeDeliveryAndAck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data.DeliveryID != "dlv_test" || data.EventID != "evt_test" || data.Status != "accepted" {
+	if data.DeliveryID != "dlv_test" || data.EventID != "evt_test" || data.Status != "completed" {
 		t.Fatalf("ack data = %#v", data)
 	}
 }

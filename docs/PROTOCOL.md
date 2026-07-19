@@ -154,6 +154,8 @@ Acknowledgement states:
 
 `accepted` stops network redelivery. A later `completed` or `failed` acknowledgement reports the runtime outcome.
 
+A client that has no durable local inbox SHOULD omit `accepted` and send `completed` or `failed` after the runtime finishes. This prevents an event from being lost if the client crashes between acknowledgement and runtime execution. The reference Go client follows this behavior for runtime-backed delivery.
+
 The client MUST keep the local mapping separately, for example:
 
 ```text

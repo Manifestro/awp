@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -23,6 +24,7 @@ type Options struct {
 	Adapter   string
 	Once      bool
 	Receive   func(protocol.Message) error
+	Handle    func(context.Context, protocol.DeliveryData) error
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -49,7 +51,7 @@ func Run(ctx context.Context, options Options) error {
 		},
 		Capabilities: protocol.Capabilities{
 			Adapters: installedAdapters(),
-			Resume:   false,
+			Resume:   options.Handle != nil,
 		},
 	})
 	if err != nil {
@@ -97,8 +99,34 @@ func Run(ctx context.Context, options Options) error {
 			if err := receive(options.Receive, message); err != nil {
 				return err
 			}
-			if err := acknowledge(ctx, connection, message); err != nil {
+			delivery, err := protocol.DecodeData[protocol.DeliveryData](message)
+			if err != nil {
 				return err
+			}
+			if delivery.DeliveryID == "" || delivery.EventID == "" {
+				return errors.New("event.deliver requires delivery_id and event_id")
+			}
+			if err := validateTarget(options, delivery); err != nil {
+				return err
+			}
+			if options.Handle == nil {
+				if err := acknowledge(ctx, connection, delivery, "accepted", nil); err != nil {
+					return err
+				}
+			} else {
+				handleErr := options.Handle(ctx, delivery)
+				status := "completed"
+				var result map[string]any
+				if handleErr != nil {
+					status = "failed"
+					result = map[string]any{"error": handleErr.Error()}
+				}
+				if err := acknowledge(ctx, connection, delivery, status, result); err != nil {
+					return err
+				}
+				if handleErr != nil {
+					return fmt.Errorf("handle AWP event %s: %w", delivery.EventID, handleErr)
+				}
 			}
 			if options.Once {
 				return nil
@@ -132,25 +160,41 @@ func bindSession(ctx context.Context, connection *websocket.Conn, options Option
 	return nil
 }
 
-func acknowledge(ctx context.Context, connection *websocket.Conn, delivery protocol.Message) error {
-	data, err := protocol.DecodeData[protocol.DeliveryData](delivery)
-	if err != nil {
-		return err
-	}
-	if data.DeliveryID == "" || data.EventID == "" {
-		return errors.New("event.deliver requires delivery_id and event_id")
-	}
-
+func acknowledge(
+	ctx context.Context,
+	connection *websocket.Conn,
+	delivery protocol.DeliveryData,
+	status string,
+	result map[string]any,
+) error {
 	ack, err := protocol.New(protocol.ActionEventAck, protocol.AckData{
-		DeliveryID: data.DeliveryID,
-		EventID:    data.EventID,
-		Status:     "accepted",
+		DeliveryID: delivery.DeliveryID,
+		EventID:    delivery.EventID,
+		Status:     status,
+		Result:     result,
 	})
 	if err != nil {
 		return err
 	}
 	if err := wsjson.Write(ctx, connection, ack); err != nil {
 		return fmt.Errorf("send event.ack: %w", err)
+	}
+	return nil
+}
+
+func validateTarget(options Options, delivery protocol.DeliveryData) error {
+	if options.SessionID == "" {
+		return nil
+	}
+	var target protocol.TargetData
+	if err := json.Unmarshal(delivery.Target, &target); err != nil {
+		return fmt.Errorf("decode event.deliver target: %w", err)
+	}
+	if target.DeviceID != options.Config.DeviceID {
+		return fmt.Errorf("delivery targets device %q, expected %q", target.DeviceID, options.Config.DeviceID)
+	}
+	if target.SessionID != options.SessionID {
+		return fmt.Errorf("delivery targets session %q, expected %q", target.SessionID, options.SessionID)
 	}
 	return nil
 }

@@ -192,16 +192,31 @@ awp config set \
 awp config show --json
 awp doctor --json
 
-# Connect, acknowledge one delivered event, and exit.
-awp connect \
+# Bind an opaque AWP session to a local Codex CLI session.
+awp sessions bind \
   --session-id ses_01JABC123 \
   --adapter codex \
+  --runtime-session-id 019f79c6-0c42-76a3-8812-8ec8b77d3e66 \
+  --workspace /path/to/project \
+  --json
+
+# Connect, wake Codex for one delivered event, and exit.
+awp connect \
+  --session-id ses_01JABC123 \
   --once \
   --timeout 30s \
   --json
 ```
 
 The bearer token is not written to the configuration file. `token_env` contains only the name of the environment variable that holds it.
+
+The mapping from an AWP `session_id` to the Codex runtime session remains in the local `sessions.json` registry and is never sent to the AWP Service. On delivery, the adapter invokes:
+
+```text
+codex exec resume --json <runtime-session-id> -
+```
+
+The universal AWP event prompt is passed through stdin. The adapter does not add sandbox bypasses, permission bypasses, model overrides, or other privilege-changing flags.
 
 The main open design questions are:
 
@@ -225,8 +240,9 @@ The main open design questions are:
 - [ ] Specify acknowledgement and retry behavior
 - [ ] Create a JSON Schema for AWP events
 - [ ] Build a reference AWP Service
-- [ ] Build an AWP Client
-- [ ] Build Codex and Claude Code adapters
+- [x] Build an AWP Client MVP
+- [x] Build a Codex CLI adapter
+- [ ] Build a Claude Code adapter
 - [ ] Add the first Sinores integration
 - [ ] Publish interoperability tests
 

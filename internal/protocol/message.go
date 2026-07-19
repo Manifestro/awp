@@ -73,10 +73,16 @@ type DeliveryData struct {
 	Attempt    int             `json:"attempt"`
 }
 
+type TargetData struct {
+	DeviceID  string `json:"device_id"`
+	SessionID string `json:"session_id"`
+}
+
 type AckData struct {
-	DeliveryID string `json:"delivery_id"`
-	EventID    string `json:"event_id"`
-	Status     string `json:"status"`
+	DeliveryID string         `json:"delivery_id"`
+	EventID    string         `json:"event_id"`
+	Status     string         `json:"status"`
+	Result     map[string]any `json:"result,omitempty"`
 }
 
 type PongData struct {

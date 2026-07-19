@@ -39,13 +39,24 @@ awp config set \
   --json
 ```
 
-Connect the client and bind an AWP session:
+Bind the public AWP session identifier to a local Codex CLI session. Replace the runtime ID and workspace with real local values:
+
+```bash
+awp sessions bind \
+  --config /tmp/awp-example.json \
+  --session-id ses_01JABC123 \
+  --adapter codex \
+  --runtime-session-id 019f79c6-0c42-76a3-8812-8ec8b77d3e66 \
+  --workspace /path/to/project \
+  --json
+```
+
+Connect the client and register the bound AWP session with the service:
 
 ```bash
 awp connect \
   --config /tmp/awp-example.json \
   --session-id ses_01JABC123 \
-  --adapter codex \
   --once \
   --json
 ```
