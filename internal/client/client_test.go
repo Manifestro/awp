@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Manifestro/awp/internal/config"
 	"github.com/Manifestro/awp/internal/protocol"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -108,14 +107,10 @@ func TestRunHandshakeDeliveryAndAck(t *testing.T) {
 	serviceURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	received := make([]string, 0, 2)
 	err := Run(context.Background(), Options{
-		Config: config.Config{
-			Version:    "0.1",
-			ServiceURL: serviceURL,
-			DeviceID:   "dev_test",
-			TokenEnv:   "AWP_TOKEN",
-		},
-		Token:   "test-token",
-		Version: "test",
+		ServiceURL: serviceURL,
+		DeviceID:   "dev_test",
+		Token:      "test-token",
+		Version:    "test",
 		Sessions: []SessionRegistration{
 			{SessionID: "ses_first", Adapter: "codex", Metadata: map[string]any{}},
 			{SessionID: "ses_test", Adapter: "codex", Metadata: map[string]any{}},
@@ -212,8 +207,8 @@ func TestConcurrentDeliveryDoesNotBlockHeartbeat(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	serviceURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	err := Run(ctx, Options{
-		Config: config.Config{Version: "0.1", ServiceURL: serviceURL, DeviceID: "dev_concurrent", TokenEnv: "AWP_TOKEN"},
-		Token:  "test", Version: "test", Concurrent: true,
+		ServiceURL: serviceURL, DeviceID: "dev_concurrent",
+		Token: "test", Version: "test", Concurrent: true,
 		Sessions: []SessionRegistration{{SessionID: "ses_concurrent", Adapter: "codex"}},
 		Handle: func(context.Context, protocol.DeliveryData) error {
 			close(handlerStarted)

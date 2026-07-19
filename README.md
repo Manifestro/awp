@@ -1,281 +1,303 @@
 # Agent Wake Protocol (AWP)
 
-**Wake dormant AI agent sessions with external events.**
+**The event channel that complements MCP.**
 
-Agent Wake Protocol (AWP) is an open protocol for delivering events from always-on systems to inactive agent sessions such as Codex, Claude Code, and other agent runtimes.
+MCP lets an active agent call a service. AWP lets that same service deliver a later event back to the agent and resume the correct local session.
 
-MCP lets an active agent call tools. AWP lets an external system wake the agent when something happens.
+```text
+Agent ── MCP ──▶ Provider: call tools now
+Agent ◀─ AWP ─── Provider: receive events later
+```
 
-AWP is created and developed by the [Manifestro](https://github.com/Manifestro) team. The canonical repository is [Manifestro/awp](https://github.com/Manifestro/awp).
+AWP is created by [Manifestro](https://github.com/Manifestro). The canonical repository is [Manifestro/awp](https://github.com/Manifestro/awp).
 
-> **Project status:** AWP is a runnable MVP and an early protocol draft. The Go client, multi-session daemon, Codex CLI adapter, macOS autostart, and local example backend work end to end. The protocol and APIs are not stable yet, and the example backend is not production-ready.
+> **Status:** runnable MVP and early protocol draft. The Go multi-provider client, multi-session routing, Codex CLI adapter, macOS autostart, and example provider endpoint work end to end. Protocol and local configuration formats are not stable yet.
+
+## Core architecture
+
+There is no central AWP server.
+
+Every product that wants to wake agents exposes its own AWP endpoint beside its MCP endpoint:
+
+```text
+Sinores
+  MCP: https://sinores.net/mcp
+  AWP: wss://sinores.net/awp
+
+Another provider
+  MCP: https://provider.example/mcp
+  AWP: wss://provider.example/awp
+```
+
+The local AWP daemon connects outward to every configured provider:
+
+```text
+                           ┌─▶ Sinores AWP
+Local AWP daemon ──────────┼─▶ GitHub provider AWP
+                           └─▶ Email provider AWP
+
+Local AWP daemon
+  ├─ sinores / ses_support  ─▶ Codex runtime session A
+  ├─ sinores / ses_sales    ─▶ Codex runtime session B
+  └─ github  / ses_project  ─▶ Codex runtime session C
+```
+
+Each provider connection is independent. If Sinores is offline, GitHub events can continue to work. Each connection may bind multiple local agent sessions.
+
+The client initiates all WebSocket connections, so the user's computer needs no public domain, static IP, inbound port, or port forwarding.
+
+## Provider responsibilities
+
+An MCP/API provider implementing AWP is responsible for:
+
+- exposing an authenticated `wss://.../awp` endpoint;
+- accepting `client.hello` and one or more `session.bind` messages;
+- associating its own application resources with opaque AWP session IDs;
+- retaining events while a client is offline according to its policy;
+- delivering `event.deliver` to the correct device and session;
+- handling acknowledgements, retries, deduplication, and heartbeats.
+
+The provider never receives the Codex or Claude runtime session ID. That mapping stays only on the user's device.
+
+## Client responsibilities
+
+The local AWP client is responsible for:
+
+- maintaining one outbound connection per configured provider;
+- registering all local bindings relevant to each provider;
+- routing by the pair `(provider, session_id)`;
+- resuming the correct local runtime through an adapter;
+- preserving existing runtime permissions;
+- sending `completed`, `failed`, or another valid acknowledgement.
+
+## Relationship to MCP
+
+| Protocol | Direction | Purpose |
+| --- | --- | --- |
+| MCP | Agent → provider | Call tools, read resources, and perform actions while the agent is active |
+| AWP | Provider → agent session | Deliver a later event and resume an inactive local session |
+
+Example with Sinores:
+
+```text
+1. Codex calls Sinores through https://sinores.net/mcp.
+2. Sinores sends a WhatsApp message.
+3. Codex finishes its turn.
+4. Sinores later receives a WhatsApp reply.
+5. wss://sinores.net/awp delivers message.received.
+6. The local daemon resumes the bound Codex session.
+```
 
 ## Documentation
 
 | Document | Purpose |
 | --- | --- |
-| [AWP wire protocol](./docs/PROTOCOL.md) | AWP `0.1` envelopes, actions, connection lifecycle, and acknowledgements |
-| [Backend implementation guide](./docs/HOW_TO_CREATE_AWP_BACKEND.md) | Persistence, routing, retries, security, scaling, and compatibility requirements |
-| [JSON examples](./docs/examples) | Ready-to-use messages for every current protocol action |
-| [Conceptual draft](./AWP.md) | Original problem statement, roles, and design direction |
-| [Example backend](./example/backend) | Local FastAPI service for development and end-to-end testing |
+| [Wire protocol](./docs/PROTOCOL.md) | AWP `0.1` envelopes, connection lifecycle, bindings, delivery, ACKs, and heartbeat |
+| [Provider implementation guide](./docs/HOW_TO_CREATE_AWP_BACKEND.md) | How an MCP/API product implements its own AWP backend endpoint |
+| [JSON messages](./docs/examples) | Current protocol examples |
+| [Conceptual draft](./AWP.md) | Roles, provider-owned endpoint model, and design direction |
+| [FastAPI example](./example/backend) | Local example of one provider's AWP endpoint |
 
-## Why AWP?
+## Current implementation
 
-Agent sessions often need to wait for something outside their current execution:
+The repository contains:
 
-- a customer replies on WhatsApp;
-- a pull request receives a new comment;
-- a background job completes;
-- monitoring detects an incident;
-- an email arrives;
-- a scheduled time is reached.
+- AWP `0.1` JSON messages over WebSocket and HTTP publication;
+- a Go client with agent-friendly JSON output;
+- multi-provider configuration;
+- provider-scoped local session bindings;
+- one independent connection and reconnect loop per provider;
+- multiple sessions per provider connection;
+- parallel processing across sessions and sequential processing within one session;
+- a Codex CLI adapter using `codex exec resume`;
+- explicit, reversible macOS daemon autostart;
+- a FastAPI example of a provider-owned AWP endpoint.
 
-Today, these systems can expose tools through MCP or send traditional webhooks. However, a local agent session may be inactive, behind NAT, running on a device with a dynamic IP, and unable to receive an inbound webhook.
+Not implemented yet:
 
-AWP introduces a standard delivery path between the system producing the event and the local runtime capable of resuming the agent session.
+- Claude Code adapter;
+- Linux systemd installer;
+- formal JSON Schemas and conformance suite;
+- a standardized MCP-to-AWP association operation;
+- stable pairing, credential issuance, and subscription APIs.
 
-## How it works
+## Build
 
-```text
-┌──────────────┐       AWP event       ┌─────────────┐
-│ Event Server │ ────────────────────▶ │ AWP Service │
-│   Sinores    │                       │ queue/relay │
-└──────────────┘                       └──────┬──────┘
-                                            │
-                                  outbound connection
-                                            │
-                                     ┌──────▼─────┐
-                                     │ AWP Client │
-                                     └──────┬─────┘
-                                            │ resume + event
-                                  ┌─────────▼─────────┐
-                                  │ Codex/Claude Code │
-                                  └───────────────────┘
+Requirements are Go and an installed runtime such as Codex CLI.
+
+```bash
+go build -o ./bin/awp ./cmd/awp
+./bin/awp version --json
 ```
 
-The AWP Client opens an outbound connection to the AWP Service. This means the user's computer does not need a public domain, static IP address, port forwarding, or an inbound firewall rule.
+Use a stable binary location before enabling autostart. The launch agent records the absolute path to the current executable.
 
-When an event occurs:
+## Configure providers
 
-1. The Event Server creates an AWP event.
-2. The AWP Service authenticates, queues, and routes the event.
-3. The AWP Client receives it over an outbound connection.
-4. The client finds the associated local session.
-5. The client resumes Codex, Claude Code, or another compatible runtime with the event.
+Configuration version `0.2` stores a device ID and a map of provider-owned AWP endpoints. Tokens remain in environment variables.
 
-## Roles
+This is a breaking replacement for the earlier single-service `0.1` local config. Recreate old configs explicitly because AWP cannot safely guess which provider owns an existing binding.
 
-### AWP Client
+```bash
+export SINORES_TOKEN=your-sinores-token
+export GITHUB_AWP_TOKEN=your-github-provider-token
 
-The local component installed alongside an IDE or agent runtime.
+./bin/awp config set \
+  --provider sinores \
+  --service-url wss://sinores.net/awp \
+  --device-id dev_macbook_01 \
+  --token-env SINORES_TOKEN \
+  --json
 
-It is responsible for:
+./bin/awp config set \
+  --provider github \
+  --service-url wss://github-provider.example/awp \
+  --token-env GITHUB_AWP_TOKEN \
+  --json
 
-- maintaining an outbound connection to an AWP Service;
-- registering local agent session bindings;
-- receiving and acknowledging events;
-- resuming the correct agent session;
-- passing the event to the agent without changing its application data.
+./bin/awp config show --json
+./bin/awp doctor --json
+```
 
-### AWP Service
-
-The delivery service between Event Servers and AWP Clients. It behaves like a durable webhook relay for clients that cannot accept public inbound connections.
-
-It is responsible for:
-
-- authenticating servers and clients;
-- accepting and routing events;
-- storing events while a client is offline;
-- retrying unacknowledged deliveries;
-- preventing duplicate processing.
-
-### Event Server
-
-An always-on system where events originate.
-
-Examples include Sinores, GitHub integrations, email services, monitoring systems, CI pipelines, and schedulers. An Event Server does not need to understand the internals of Codex or Claude Code.
-
-## Event format
-
-Every AWP `0.1` wire message uses a common envelope:
+Generated configuration:
 
 ```json
 {
-  "type": "awp",
-  "version": "0.1",
-  "id": "msg_01JABC123",
-  "action": "event.publish",
-  "timestamp": "2026-07-19T12:00:00Z",
-  "data": {}
-}
-```
-
-- `type` and `version` identify the protocol.
-- `id` makes the individual protocol message traceable.
-- `action` selects the schema and operation.
-- `timestamp` is an RFC 3339 timestamp with a timezone.
-- `data` contains fields for that action. Application-specific content belongs inside `data.event.data` for publication and delivery actions.
-
-AWP transports `data` without defining the business fields inside it. This keeps the core protocol independent of WhatsApp, GitHub, email, or any other event source.
-
-## Sinores example
-
-[Sinores](https://sinores.net) is an MCP and REST gateway for WhatsApp. An active agent can use Sinores through MCP to send a message and then end its current turn. When the recipient replies, Sinores can create an AWP event:
-
-```json
-{
-  "type": "awp",
-  "version": "0.1",
-  "id": "msg_publish_01",
-  "action": "event.publish",
-  "timestamp": "2026-07-19T12:00:02Z",
-  "data": {
-    "event_id": "evt_sinores_01",
-    "target": {
-      "device_id": "dev_macbook_01",
-      "session_id": "ses_01JABC123"
+  "version": "0.2",
+  "device_id": "dev_macbook_01",
+  "providers": {
+    "sinores": {
+      "service_url": "wss://sinores.net/awp",
+      "token_env": "SINORES_TOKEN"
     },
-    "event": {
-      "source": "sinores",
-      "name": "message.received",
-      "timestamp": "2026-07-19T12:00:02Z",
-      "data": {
-        "channel_id": "channel_123",
-        "from": "+77001234567",
-        "message_id": "wa_message_456",
-        "text": "Yes, tomorrow at 10 works"
-      }
+    "github": {
+      "service_url": "wss://github-provider.example/awp",
+      "token_env": "GITHUB_AWP_TOKEN"
     }
   }
 }
 ```
 
-The local AWP Client resumes the associated session and gives the event to the agent:
-
-```text
-New WhatsApp message received through Sinores.
-Channel: channel_123
-From: +77001234567
-Message: Yes, tomorrow at 10 works
-```
-
-This creates a bidirectional agent workflow:
-
-```text
-Agent ──MCP──▶ Sinores ──▶ WhatsApp
-Agent ◀──AWP── Sinores ◀── WhatsApp
-```
-
-## Design principles
-
-- **Vendor-neutral:** AWP must work with different agent runtimes and event sources.
-- **Local-first:** Clients behind NAT and dynamic IP addresses must work without inbound networking.
-- **Durable:** Events should survive temporary client disconnections.
-- **Opaque application data:** The protocol transports events without owning their business schema.
-- **Secure by default:** Waking a session must never silently grant it additional permissions.
-- **At-least-once delivery:** Events use stable identifiers and acknowledgements instead of claiming impossible network-level exactly-once delivery.
-- **Adapter-based:** Runtime-specific resume behavior belongs in Codex, Claude Code, and other adapters.
-
-## Scope
-
-AWP aims to standardize:
-
-- event envelopes;
-- client and server authentication;
-- session and subscription bindings;
-- outbound client connections;
-- delivery, acknowledgement, retry, and deduplication;
-- offline event queues;
-- manual and automatic wake policies;
-- runtime adapter capabilities.
-
-AWP does not define:
-
-- how an agent reasons about an event;
-- which tools an agent may call after waking;
-- the internal storage format of agent sessions;
-- application-specific fields inside `data`;
-- a replacement for MCP or agent-to-agent protocols.
-
-## Relationship to MCP
-
-AWP complements MCP rather than replacing it:
-
-| Protocol | Direction | Purpose |
-| --- | --- | --- |
-| MCP | Agent → external system | Give an active agent tools, resources, and context |
-| AWP | External system → agent session | Deliver an event and resume an inactive agent |
-
-## Current implementation
-
-The repository currently contains:
-
-- a draft AWP `0.1` WebSocket and HTTP protocol;
-- a Go client with machine-readable, agent-friendly commands;
-- a multi-session daemon using one outbound connection per device;
-- a local session registry that never exposes runtime session IDs to the service;
-- a Codex CLI adapter using `codex exec resume`;
-- reconnect with exponential backoff;
-- explicit, reversible macOS autostart;
-- an in-memory FastAPI backend for local interoperability tests;
-- a production-oriented backend implementation guide.
-
-The FastAPI backend is a development example, not a durable production service. Claude Code, Linux autostart, formal JSON Schemas, and a conformance suite are not implemented yet.
-
-## Run the MVP locally
-
-Requirements:
-
-- Go installed;
-- Docker with Compose for the example backend;
-- Codex CLI installed and available in `PATH`;
-- an existing inactive Codex session ID and its workspace.
-
-Build a stable client binary from the repository root:
+Remove a provider explicitly:
 
 ```bash
-go build -o ./bin/awp ./cmd/awp
+./bin/awp config remove --provider github --json
 ```
 
-Start the local example AWP Service:
+## Bind local sessions
+
+Bindings are scoped by provider. The same `session_id` may exist under two providers without collision.
+
+```bash
+./bin/awp sessions bind \
+  --provider sinores \
+  --session-id ses_support \
+  --adapter codex \
+  --runtime-session-id <existing-codex-session-id> \
+  --workspace /absolute/path/to/project \
+  --metadata-json '{"channel_id":"channel_123"}' \
+  --json
+
+./bin/awp sessions bind \
+  --provider github \
+  --session-id ses_project \
+  --adapter codex \
+  --runtime-session-id <another-codex-session-id> \
+  --workspace /absolute/path/to/project \
+  --json
+
+./bin/awp sessions list --json
+./bin/awp sessions list --provider sinores --json
+```
+
+The local registry contains the runtime session IDs and is saved with mode `0600`. Runtime IDs are never sent to providers.
+
+`metadata-json` is provider-defined association data and is sent in `session.bind`. For example, Sinores may associate `channel_id` with `ses_support`. A provider may instead expose an MCP tool that accepts the opaque AWP `session_id`; the common MCP-to-AWP association operation is not standardized yet.
+
+## Run the daemon
+
+```bash
+./bin/awp daemon --json
+```
+
+The daemon loads all providers and bindings, then starts independent connection loops:
+
+```text
+sinores loop: connect → bind sinores sessions → receive → reconnect
+github loop:  connect → bind github sessions  → receive → reconnect
+```
+
+Daemon JSON Lines wrap each protocol message with its provider:
+
+```json
+{
+  "provider": "sinores",
+  "message": {
+    "type": "awp",
+    "version": "0.1",
+    "action": "event.deliver"
+  }
+}
+```
+
+For a single connection test:
+
+```bash
+./bin/awp connect \
+  --provider sinores \
+  --session-id ses_support \
+  --once \
+  --json
+```
+
+## Optional macOS autostart
+
+Autostart is opt-in. Installing or building AWP never enables it.
+
+```bash
+# Save the launch definition; do not start now.
+./bin/awp autostart enable --json
+
+# Save/update it and start the multi-provider daemon now.
+./bin/awp autostart enable --start-now --json
+
+./bin/awp autostart status --json
+./bin/awp autostart disable --json
+```
+
+Because `launchd` does not inherit an interactive shell's environment, `autostart enable` copies every configured provider token into a separate protected `<provider>.token` file. Tokens are not embedded in the plist or main config. Disabling autostart leaves the protected token directory in place.
+
+## Run the local provider example
+
+The FastAPI example behaves as one provider's AWP backend. It is not a shared or central service.
 
 ```bash
 export AWP_TOKEN=local-dev-token
 docker compose -f example/backend/compose.yaml up -d --build
-```
 
-Configure the client. The example JSON fixtures target `dev_macbook_01`:
-
-```bash
 ./bin/awp config set \
-  --service-url ws://localhost:8000/ws \
+  --provider example \
+  --service-url ws://localhost:8000/awp \
   --device-id dev_macbook_01 \
-  --config ./.awp-local/config.json \
+  --token-env AWP_TOKEN \
+  --config ./.awp/config.json \
   --json
-```
 
-Bind the fixture's public AWP session to a real local Codex session. The runtime session ID never leaves this computer:
-
-```bash
 ./bin/awp sessions bind \
-  --config ./.awp-local/config.json \
+  --provider example \
   --session-id ses_01JABC123 \
   --adapter codex \
   --runtime-session-id <existing-codex-session-id> \
   --workspace /absolute/path/to/project \
+  --config ./.awp/config.json \
   --json
-```
 
-Start the multi-session daemon in one terminal:
-
-```bash
 AWP_TOKEN=local-dev-token ./bin/awp daemon \
-  --config ./.awp-local/config.json \
+  --config ./.awp/config.json \
   --json
 ```
 
-Publish the example event from another terminal:
+Publish the fixture from another terminal:
 
 ```bash
 curl -X POST http://localhost:8000/events \
@@ -284,152 +306,70 @@ curl -X POST http://localhost:8000/events \
   --data @docs/examples/05-event-publish-sinores.json
 ```
 
-The expected flow is:
+Expected lifecycle:
 
 ```text
-POST /events
-  → event.deliver over WebSocket
-  → local session lookup
+provider creates event
+  → provider's /awp endpoint sends event.deliver
+  → daemon selects (provider, session_id)
   → codex exec resume --json <runtime-session-id> -
-  → completed or failed event.ack
+  → daemon sends completed or failed event.ack to that provider
 ```
 
-Inspect the service and local bindings:
-
-```bash
-curl http://localhost:8000/health
-./bin/awp sessions list --config ./.awp-local/config.json --json
-```
-
-Stop the local backend when finished:
+Stop the example:
 
 ```bash
 docker compose -f example/backend/compose.yaml down
 ```
 
-The example backend stores connections, bindings, events, and acknowledgements only in memory. Restarting it clears that state. Use the [backend implementation guide](./docs/HOW_TO_CREATE_AWP_BACKEND.md) for a durable deployment.
+The example keeps all state in memory and loses it on restart. It is for interoperability testing, not production deployment.
 
-## Connect to another AWP Service
+## Wire envelope
 
-The client commands are non-interactive and provide stable JSON output so Codex or Claude Code can configure and inspect AWP directly:
+Every AWP `0.1` message uses:
 
-```bash
-./bin/awp config set \
-  --service-url wss://awp.example.com/ws \
-  --device-id dev_macbook_01 \
-  --token-env AWP_TOKEN \
-  --json
-
-./bin/awp config show --json
-./bin/awp doctor --json
-
-# Bind an opaque AWP session to a local Codex CLI session.
-./bin/awp sessions bind \
-  --session-id ses_01JABC123 \
-  --adapter codex \
-  --runtime-session-id 019f79c6-0c42-76a3-8812-8ec8b77d3e66 \
-  --workspace /path/to/project \
-  --json
-
-# Connect, wake Codex for one delivered event, and exit.
-./bin/awp connect \
-  --session-id ses_01JABC123 \
-  --once \
-  --timeout 30s \
-  --json
+```json
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_01JABC123",
+  "action": "event.deliver",
+  "timestamp": "2026-07-19T12:00:00Z",
+  "data": {}
+}
 ```
 
-For a long-running multi-session client, start the daemon. It loads every binding from the local `sessions.json`, registers them over one WebSocket, routes each delivery by `target.session_id`, and reconnects with exponential backoff:
+Provider-specific application content belongs in `data.event.data`. The AWP transport preserves it as opaque, untrusted JSON.
 
-```bash
-./bin/awp daemon --json
-```
+## Design principles
 
-### Optional autostart
-
-Autostart is explicit and editable; installing the AWP client never enables it automatically. The first implementation uses one per-user macOS `launchd` agent for the multi-session daemon.
-
-```bash
-# Enable launch at the next login, but do not start anything now.
-./bin/awp autostart enable \
-  --json
-
-# Enable or update the definition and also start it now.
-./bin/awp autostart enable \
-  --start-now \
-  --json
-
-# Inspect both the saved definition and current launchd state.
-./bin/awp autostart status \
-  --json
-
-# Stop the launch agent and remove its autostart definition.
-./bin/awp autostart disable \
-  --json
-```
-
-`autostart enable` copies the token from the configured environment variable into a separate local file with mode `0600`, because `launchd` does not inherit an interactive shell's environment. The token is never embedded in the plist or the main configuration. `autostart disable` intentionally leaves that protected token file in place. Running `enable --start-now` again updates the paths and token, restarts the daemon, and reloads all session bindings.
-
-On platforms without an autostart adapter, run `awp daemon` under systemd, a container, or another process supervisor. Native Linux service management is planned.
-
-The current configuration connects one daemon to one AWP Service while multiplexing any number of event sources and local sessions over that connection. Supporting several independent AWP Service endpoints from one daemon will use named connection profiles and is a separate planned capability.
-
-The bearer token is not written to the configuration file. `token_env` contains only the name of the environment variable that holds it.
-
-The mapping from an AWP `session_id` to the Codex runtime session remains in the local `sessions.json` registry and is never sent to the AWP Service. On delivery, the adapter invokes:
-
-```text
-codex exec resume --json <runtime-session-id> -
-```
-
-The universal AWP event prompt is passed through stdin. The adapter does not add sandbox bypasses, permission bypasses, model overrides, or other privilege-changing flags.
-
-The main open design questions are:
-
-- how clients and sessions are securely paired and provisioned;
-- how publishers receive narrowly scoped authorization;
-- how subscriptions and source filters are expressed;
-- what default retention, retry, and dead-letter policies should be standardized;
-- how manual approval and automatic wake policies are represented on the wire;
-- how wake batching and coalescing should work;
-- which capabilities need negotiation across protocol versions;
-- how conformance is validated across independent clients and services.
+- **Provider-owned:** every MCP/API product exposes and operates its own AWP endpoint.
+- **Complementary to MCP:** MCP is the active request path; AWP is the later event path.
+- **Multi-provider:** one local daemon may connect to many independent products.
+- **Provider-scoped sessions:** routing uses `(provider, device_id, session_id)`.
+- **Local runtime identity:** vendor runtime IDs never leave the client.
+- **Outbound-only client networking:** no inbound port or static client IP.
+- **At-least-once delivery:** stable event and delivery IDs plus acknowledgements.
+- **Secure by default:** waking a session never adds permissions.
 
 ## Roadmap
 
-- [x] Define the problem and core roles
-- [x] Publish the initial event envelope
-- [x] Define initial protocol terminology and identifiers
-- [ ] Specify pairing and authentication
-- [ ] Specify subscriptions
-- [x] Specify initial session bindings
-- [x] Specify the WebSocket transport
-- [x] Specify initial acknowledgement and retry behavior
-- [ ] Create a JSON Schema for AWP events
-- [x] Build a local example AWP Service
-- [ ] Build a durable reference AWP Service
-- [x] Build an AWP Client MVP
-- [x] Build a Codex CLI adapter
+- [x] Define provider-owned AWP endpoints beside MCP
+- [x] Specify the initial AWP `0.1` wire protocol
+- [x] Build the Go multi-provider, multi-session daemon
+- [x] Build the Codex CLI adapter
 - [x] Add reconnect/backoff and opt-in macOS autostart
-- [x] Add one-connection multi-session daemon
-- [ ] Add named profiles for multiple independent AWP Services
-- [ ] Build a Claude Code adapter
-- [ ] Add native Linux systemd autostart
-- [ ] Add the first Sinores integration
-- [ ] Publish interoperability tests
+- [x] Publish a local provider backend example
+- [ ] Standardize how an MCP interaction associates resources with an AWP session
+- [ ] Specify provider pairing, token issuance, and rotation
+- [ ] Create JSON Schemas and a provider/client conformance suite
+- [ ] Build the Claude Code adapter
+- [ ] Add native Linux systemd management
+- [ ] Add the first production Sinores AWP endpoint
 
 ## Contributing
 
-AWP is at the stage where architectural feedback is especially valuable. Issues and pull requests may propose:
-
-- protocol terminology;
-- event and transport schemas;
-- security and authentication models;
-- failure and reconnection behavior;
-- adapter contracts;
-- real-world wake scenarios.
-
-Please treat all current names and schemas as experimental until the first stable specification is published.
+Useful contributions include provider implementations, runtime adapters, protocol proposals, security review, JSON Schemas, and interoperability tests.
 
 - [Open an issue](https://github.com/Manifestro/awp/issues)
 - [View pull requests](https://github.com/Manifestro/awp/pulls)
@@ -437,7 +377,7 @@ Please treat all current names and schemas as experimental until the first stabl
 
 ## License
 
-A license has not been selected yet. Until a license file is added, no open-source license is granted by this repository. Selecting and adding an explicit license is required before the first public release.
+A license has not been selected yet. Until a license file is added, no open-source license is granted by this repository.
 
 ---
 

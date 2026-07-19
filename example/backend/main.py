@@ -293,7 +293,7 @@ async def health() -> dict[str, Any]:
     return {"status": "ok", "protocol_version": PROTOCOL_VERSION, **await state.counts()}
 
 
-@app.websocket("/ws")
+@app.websocket("/awp")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     if not authorized(websocket.headers.get("authorization")):
         await websocket.close(code=1008, reason="Invalid AWP bearer token")

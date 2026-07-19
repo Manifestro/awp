@@ -3,7 +3,7 @@
 Status: early draft  
 Protocol version: `0.1`
 
-This document defines the first common wire format between an AWP Event Server, AWP Service, and AWP Client.
+This document defines the wire format between an AWP Provider and a local AWP Client. An AWP Provider is an MCP/API product that exposes and operates its own AWP endpoint; AWP does not require a central relay.
 
 For a backend implementation guide covering persistence, retries, scaling, security, and conformance testing, see [HOW_TO_CREATE_AWP_BACKEND.md](./HOW_TO_CREATE_AWP_BACKEND.md).
 
@@ -11,8 +11,8 @@ For a backend implementation guide covering persistence, retries, scaling, secur
 
 AWP messages are JSON objects. The same envelope is used over WebSocket and HTTP.
 
-- An AWP Client connects to an AWP Service using an outbound secure WebSocket (`wss`).
-- An Event Server publishes events to an AWP Service using HTTPS or an authenticated WebSocket.
+- An AWP Client connects independently to each provider's secure WebSocket endpoint (`wss`), commonly `wss://provider.example/awp`.
+- The provider creates events from its own application state. Its internal components MAY use `event.publish` over HTTPS or an authenticated WebSocket.
 - Every WebSocket frame contains exactly one UTF-8 encoded AWP JSON message.
 - Binary WebSocket frames are not supported in protocol version `0.1`.
 
@@ -91,13 +91,13 @@ Authentication SHOULD be performed during the HTTP WebSocket upgrade, for exampl
 
 ### 2. Server welcome
 
-After accepting the client, the service returns `server.welcome`.
+After accepting the client, the provider returns `server.welcome`.
 
-The service MUST close the connection if the client cannot be authenticated or the protocol version is unsupported.
+The provider MUST close the connection if the client cannot be authenticated or the protocol version is unsupported.
 
 ### 3. Session binding
 
-The client sends `session.bind` to announce an opaque AWP session binding. The mapping from this AWP `session_id` to a Codex, Claude Code, or other vendor runtime session identifier MUST remain on the local AWP Client and MUST NOT be transmitted to the AWP Service.
+The client sends `session.bind` to announce an opaque AWP session binding to this provider. The mapping from `(provider, session_id)` to a Codex, Claude Code, or other vendor runtime session identifier MUST remain on the local AWP Client and MUST NOT be transmitted to the provider.
 
 ```json
 {
@@ -116,13 +116,15 @@ The client sends `session.bind` to announce an opaque AWP session binding. The m
 }
 ```
 
-The service confirms the binding with `session.bound`. Bindings MAY expire and MAY need to be restored after client restart.
+The provider confirms the binding with `session.bound`. Bindings MAY expire and MAY need to be restored after client restart.
 
-A client MAY send multiple `session.bind` messages on the same device connection. A service MUST route each delivery by both `device_id` and `session_id`; it MUST NOT require a separate WebSocket connection per session. One connection per device avoids competing sockets when several agent sessions or event sources are active.
+`session.bind.data.metadata` is provider-defined JSON used only to associate the opaque AWP session with provider-owned resources or subscriptions. For example, Sinores MAY accept a `channel_id`. A provider MAY alternatively expose an MCP tool that associates its resource with an `awp_session_id`. Providers MUST NOT place or request the local vendor runtime session ID in this metadata.
+
+A client MAY send multiple `session.bind` messages on the same provider connection. A provider MUST route each delivery by both `device_id` and `session_id`; it MUST NOT require a separate WebSocket connection per session. The local daemon uses a separate connection for each provider, and a provider failure MUST NOT affect other provider connections.
 
 ### 4. Event publication
 
-An Event Server sends `event.publish` to the AWP Service.
+The provider creates an event. When the provider separates event-producing components from its AWP endpoint, an internal Event Server MAY send `event.publish` to that provider's AWP backend. A public HTTP publication endpoint is an implementation choice, not a required central AWP API.
 
 The target is part of the action data:
 
@@ -135,13 +137,13 @@ The target is part of the action data:
 }
 ```
 
-`device_id` and `session_id` identify the destination. The event-specific payload is stored in `data.event.data` and is not interpreted by the AWP Service.
+`device_id` and `session_id` identify the destination inside this provider. The event-specific payload is stored in `data.event.data` and is not interpreted by the AWP transport.
 
 ### 5. Event delivery
 
-The AWP Service validates and persists the published event, creates a `delivery_id`, and sends `event.deliver` to the connected client.
+The provider validates and persists the event, creates a `delivery_id`, and sends `event.deliver` to the connected client.
 
-Delivery semantics are at least once. The service MAY send the same `delivery_id` again until it receives an acknowledgement.
+Delivery semantics are at least once. The provider MAY send the same `delivery_id` again until it receives an acknowledgement.
 
 ### 6. Delivery acknowledgement
 
@@ -163,7 +165,7 @@ A client that has no durable local inbox SHOULD omit `accepted` and send `comple
 The client MUST keep the local mapping separately, for example:
 
 ```text
-ses_01JABC123 -> adapter: codex, runtime session: 019f79c6-...
+sinores / ses_01JABC123 -> adapter: codex, runtime session: 019f79c6-...
 ```
 
 This mapping is local state and is not an AWP wire message.
@@ -172,20 +174,20 @@ This mapping is local state and is not an AWP wire message.
 
 | Direction | Action | Purpose |
 | --- | --- | --- |
-| Client → Service | `client.hello` | Start an authenticated AWP connection. |
-| Service → Client | `server.welcome` | Accept the client and negotiate connection settings. |
-| Client → Service | `session.bind` | Register a local agent session binding. |
-| Service → Client | `session.bound` | Confirm the session binding. |
-| Event Server → Service | `event.publish` | Publish an event for a target session. |
-| Service → Client | `event.deliver` | Deliver a persisted event. |
-| Client → Service | `event.ack` | Acknowledge delivery or report its outcome. |
+| Client → Provider | `client.hello` | Start an authenticated provider connection. |
+| Provider → Client | `server.welcome` | Accept the client and negotiate connection settings. |
+| Client → Provider | `session.bind` | Register a local agent session with this provider. |
+| Provider → Client | `session.bound` | Confirm the session binding. |
+| Provider internal | `event.publish` | Optionally publish an internally created event into the provider's AWP backend. |
+| Provider → Client | `event.deliver` | Deliver a persisted provider event. |
+| Client → Provider | `event.ack` | Acknowledge delivery or report its outcome. |
 | Either direction | `heartbeat.ping` | Check connection liveness. |
 | Either direction | `heartbeat.pong` | Respond to a heartbeat ping. |
 | Either direction | `error` | Report a protocol or processing error. |
 
 ## Event data
 
-AWP does not define application fields inside `event.data`. An Event Server owns this schema.
+AWP does not define application fields inside `event.data`. The provider owns this schema.
 
 For example, Sinores can publish:
 
@@ -202,7 +204,7 @@ For example, Sinores can publish:
 }
 ```
 
-The AWP Service MUST preserve the event payload. The AWP Client MAY pass it to the runtime as JSON, formatted text, or both.
+The provider MUST preserve the event payload. The AWP Client MAY pass it to the runtime as JSON, formatted text, or both.
 
 ## Error message
 
@@ -226,7 +228,7 @@ Errors use the standard envelope and the `error` action:
 
 ## Minimum MVP behavior
 
-The first FastAPI Service and Go Client only need to implement:
+The first provider endpoint and Go Client only need to implement:
 
 1. WebSocket authentication.
 2. `client.hello` and `server.welcome`.

@@ -66,16 +66,25 @@ func runAutostartEnable(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return commandError("autostart.enable", "invalid_configuration", err, *common.jsonOutput, stdout, stderr)
 	}
-	token := strings.TrimSpace(os.Getenv(cfg.TokenEnv))
-	if token == "" {
-		return commandError("autostart.enable", "token_missing", fmt.Errorf("%s is not set", cfg.TokenEnv), *common.jsonOutput, stdout, stderr)
+	registry, err := sessions.Load(paths.store)
+	if err != nil {
+		return commandError("autostart.enable", "registry_read", err, *common.jsonOutput, stdout, stderr)
 	}
-	if err := secureWrite(paths.token, []byte(token+"\n")); err != nil {
-		return commandError("autostart.enable", "token_write", err, *common.jsonOutput, stdout, stderr)
+	for providerName, provider := range cfg.Providers {
+		if len(sessions.List(registry, providerName)) == 0 {
+			continue
+		}
+		token := strings.TrimSpace(os.Getenv(provider.TokenEnv))
+		if token == "" {
+			return commandError("autostart.enable", "token_missing", fmt.Errorf("provider %s: %s is not set", providerName, provider.TokenEnv), *common.jsonOutput, stdout, stderr)
+		}
+		if err := secureWrite(filepath.Join(paths.tokenDirectory, providerName+".token"), []byte(token+"\n")); err != nil {
+			return commandError("autostart.enable", "token_write", err, *common.jsonOutput, stdout, stderr)
+		}
 	}
 	manifest, err := autostart.RenderLaunchd(autostart.LaunchdOptions{
 		BinaryPath: paths.binary, ConfigPath: paths.config, StorePath: paths.store,
-		TokenFile: paths.token, LogPath: paths.log, PathEnv: os.Getenv("PATH"),
+		TokenDirectory: paths.tokenDirectory, LogPath: paths.log, PathEnv: os.Getenv("PATH"),
 	})
 	if err != nil {
 		return commandError("autostart.enable", "manifest_render", err, *common.jsonOutput, stdout, stderr)
@@ -90,7 +99,7 @@ func runAutostartEnable(args []string, stdout, stderr io.Writer) int {
 			return commandError("autostart.enable", "launchctl_bootstrap", fmt.Errorf("%w: %s", loadErr, strings.TrimSpace(string(output))), *common.jsonOutput, stdout, stderr)
 		}
 	}
-	data := map[string]any{"enabled": true, "started": *startNow, "manifest": paths.manifest, "token_file": paths.token}
+	data := map[string]any{"enabled": true, "started": *startNow, "manifest": paths.manifest, "token_directory": paths.tokenDirectory}
 	if *common.jsonOutput {
 		return writeJSON(stdout, result{OK: true, Command: "autostart.enable", Data: data})
 	}
@@ -143,15 +152,15 @@ func runAutostartDisable(args []string, stdout, stderr io.Writer) int {
 	} else if !errors.Is(removeErr, os.ErrNotExist) {
 		return commandError("autostart.disable", "manifest_remove", removeErr, *common.jsonOutput, stdout, stderr)
 	}
-	data := map[string]any{"enabled": false, "removed": removed, "manifest": paths.manifest, "token_file": paths.token}
+	data := map[string]any{"enabled": false, "removed": removed, "manifest": paths.manifest, "token_directory": paths.tokenDirectory}
 	if *common.jsonOutput {
 		return writeJSON(stdout, result{OK: true, Command: "autostart.disable", Data: data})
 	}
-	fmt.Fprintf(stdout, "AWP daemon autostart disabled. The protected token file remains at %s.\n", paths.token)
+	fmt.Fprintf(stdout, "AWP daemon autostart disabled. Protected provider token files remain in %s.\n", paths.tokenDirectory)
 	return 0
 }
 
-type autostartPaths struct{ binary, config, store, token, log, manifest string }
+type autostartPaths struct{ binary, config, store, tokenDirectory, log, manifest string }
 
 func resolveAutostart(configPath, storePath, directory string, requireSessions bool) (autostartPaths, config.Config, error) {
 	resolvedConfig, err := config.Path(configPath)
@@ -173,7 +182,7 @@ func resolveAutostart(configPath, storePath, directory string, requireSessions b
 	if err != nil {
 		return autostartPaths{}, config.Config{}, err
 	}
-	if requireSessions && len(sessions.List(registry)) == 0 {
+	if requireSessions && len(sessions.List(registry, "")) == 0 {
 		return autostartPaths{}, config.Config{}, fmt.Errorf("no local AWP sessions are bound")
 	}
 	binary, err := os.Executable()
@@ -190,9 +199,9 @@ func resolveAutostart(configPath, storePath, directory string, requireSessions b
 	stateDir := filepath.Dir(resolvedConfig)
 	return autostartPaths{
 		binary: binary, config: resolvedConfig, store: resolvedStore,
-		token:    filepath.Join(stateDir, "autostart.token"),
-		log:      filepath.Join(stateDir, "autostart.log"),
-		manifest: autostart.Filename(directory),
+		tokenDirectory: filepath.Join(stateDir, "tokens"),
+		log:            filepath.Join(stateDir, "autostart.log"),
+		manifest:       autostart.Filename(directory),
 	}, cfg, nil
 }
 

@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/Manifestro/awp/internal/config"
 	"github.com/Manifestro/awp/internal/protocol"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -18,7 +17,8 @@ import (
 const maxMessageBytes = 64 * 1024
 
 type Options struct {
-	Config     config.Config
+	ServiceURL string
+	DeviceID   string
 	Token      string
 	Version    string
 	SessionID  string
@@ -42,12 +42,12 @@ func Run(ctx context.Context, options Options) error {
 		headers.Set("Authorization", "Bearer "+options.Token)
 	}
 
-	connection, response, err := websocket.Dial(ctx, options.Config.ServiceURL, &websocket.DialOptions{HTTPHeader: headers})
+	connection, response, err := websocket.Dial(ctx, options.ServiceURL, &websocket.DialOptions{HTTPHeader: headers})
 	if err != nil {
 		if response != nil {
-			return fmt.Errorf("connect to AWP Service: HTTP %d: %w", response.StatusCode, err)
+			return fmt.Errorf("connect to AWP provider: HTTP %d: %w", response.StatusCode, err)
 		}
-		return fmt.Errorf("connect to AWP Service: %w", err)
+		return fmt.Errorf("connect to AWP provider: %w", err)
 	}
 	runContext, cancel := context.WithCancel(ctx)
 	var processing sync.WaitGroup
@@ -59,7 +59,7 @@ func Run(ctx context.Context, options Options) error {
 	connection.SetReadLimit(maxMessageBytes)
 
 	hello, err := protocol.New(protocol.ActionClientHello, protocol.ClientHelloData{
-		DeviceID: options.Config.DeviceID,
+		DeviceID: options.DeviceID,
 		Client: protocol.ClientInfo{
 			Name:    "awp-go",
 			Version: options.Version,
@@ -95,8 +95,8 @@ func Run(ctx context.Context, options Options) error {
 			if err != nil {
 				return err
 			}
-			if welcome.DeviceID != options.Config.DeviceID {
-				return fmt.Errorf("server.welcome device_id %q does not match configured device %q", welcome.DeviceID, options.Config.DeviceID)
+			if welcome.DeviceID != options.DeviceID {
+				return fmt.Errorf("server.welcome device_id %q does not match configured device %q", welcome.DeviceID, options.DeviceID)
 			}
 			welcomeReceived = true
 			if err := receive(options.Receive, message); err != nil {
@@ -213,8 +213,8 @@ func validateTarget(options Options, delivery protocol.DeliveryData) error {
 	if err := json.Unmarshal(delivery.Target, &target); err != nil {
 		return fmt.Errorf("decode event.deliver target: %w", err)
 	}
-	if target.DeviceID != options.Config.DeviceID {
-		return fmt.Errorf("delivery targets device %q, expected %q", target.DeviceID, options.Config.DeviceID)
+	if target.DeviceID != options.DeviceID {
+		return fmt.Errorf("delivery targets device %q, expected %q", target.DeviceID, options.DeviceID)
 	}
 	registrations := sessionRegistrations(options)
 	if len(registrations) == 0 {

@@ -11,12 +11,12 @@ import (
 const daemonLabel = "net.manifestro.awp"
 
 type LaunchdOptions struct {
-	BinaryPath string
-	ConfigPath string
-	StorePath  string
-	TokenFile  string
-	LogPath    string
-	PathEnv    string
+	BinaryPath     string
+	ConfigPath     string
+	StorePath      string
+	TokenDirectory string
+	LogPath        string
+	PathEnv        string
 }
 
 func Label() string {
@@ -28,20 +28,20 @@ func Filename(directory string) string {
 }
 
 func RenderLaunchd(options LaunchdOptions) ([]byte, error) {
-	if options.BinaryPath == "" || options.ConfigPath == "" || options.StorePath == "" || options.TokenFile == "" {
-		return nil, fmt.Errorf("binary, config, store, and token file are required")
+	if options.BinaryPath == "" || options.ConfigPath == "" || options.StorePath == "" || options.TokenDirectory == "" {
+		return nil, fmt.Errorf("binary, config, store, and token directory are required")
 	}
 	if options.LogPath == "" {
 		return nil, fmt.Errorf("log path is required")
 	}
 	values := map[string]string{
-		"Label":     escape(Label()),
-		"Binary":    escape(options.BinaryPath),
-		"Config":    escape(options.ConfigPath),
-		"Store":     escape(options.StorePath),
-		"TokenFile": escape(options.TokenFile),
-		"Log":       escape(options.LogPath),
-		"PathEnv":   escape(options.PathEnv),
+		"Label":          escape(Label()),
+		"Binary":         escape(options.BinaryPath),
+		"Config":         escape(options.ConfigPath),
+		"Store":          escape(options.StorePath),
+		"TokenDirectory": escape(options.TokenDirectory),
+		"Log":            escape(options.LogPath),
+		"PathEnv":        escape(options.PathEnv),
 	}
 	var output bytes.Buffer
 	if err := launchdTemplate.Execute(&output, values); err != nil {
@@ -70,8 +70,8 @@ var launchdTemplate = template.Must(template.New("launchd").Parse(`<?xml version
     <string>{{.Config}}</string>
     <string>--store</string>
     <string>{{.Store}}</string>
-    <string>--token-file</string>
-    <string>{{.TokenFile}}</string>
+    <string>--token-dir</string>
+    <string>{{.TokenDirectory}}</string>
     <string>--json</string>
   </array>
   <key>RunAtLoad</key>

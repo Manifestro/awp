@@ -9,6 +9,7 @@ import (
 func TestBindSaveLoadAndRemove(t *testing.T) {
 	registry := NewRegistry()
 	binding, err := Bind(&registry, Binding{
+		Provider:         "example",
 		SessionID:        "ses_test",
 		Adapter:          "codex",
 		RuntimeSessionID: "runtime_test",
@@ -29,7 +30,7 @@ func TestBindSaveLoadAndRemove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, found := Get(loaded, "ses_test")
+	got, found := Get(loaded, "example", "ses_test")
 	if !found || got.RuntimeSessionID != "runtime_test" {
 		t.Fatalf("loaded binding = %#v, found = %v", got, found)
 	}
@@ -40,14 +41,14 @@ func TestBindSaveLoadAndRemove(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("registry permissions = %o, want 600", info.Mode().Perm())
 	}
-	if !Remove(&loaded, "ses_test") || Remove(&loaded, "ses_test") {
+	if !Remove(&loaded, "example", "ses_test") || Remove(&loaded, "example", "ses_test") {
 		t.Fatal("Remove() is not idempotent")
 	}
 }
 
 func TestBindRejectsUnsupportedAdapter(t *testing.T) {
 	registry := NewRegistry()
-	_, err := Bind(&registry, Binding{SessionID: "ses", Adapter: "unknown", RuntimeSessionID: "runtime"})
+	_, err := Bind(&registry, Binding{Provider: "example", SessionID: "ses", Adapter: "unknown", RuntimeSessionID: "runtime"})
 	if err == nil {
 		t.Fatal("Bind() accepted unsupported adapter")
 	}

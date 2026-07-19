@@ -14,24 +14,26 @@ import (
 	"github.com/Manifestro/awp/internal/config"
 )
 
-const Version = "0.1"
+const Version = "0.2"
 
 type Binding struct {
-	SessionID        string `json:"session_id"`
-	Adapter          string `json:"adapter"`
-	RuntimeSessionID string `json:"runtime_session_id"`
-	Workspace        string `json:"workspace,omitempty"`
-	CreatedAt        string `json:"created_at"`
-	UpdatedAt        string `json:"updated_at"`
+	Provider         string         `json:"provider"`
+	SessionID        string         `json:"session_id"`
+	Adapter          string         `json:"adapter"`
+	RuntimeSessionID string         `json:"runtime_session_id"`
+	Workspace        string         `json:"workspace,omitempty"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
+	CreatedAt        string         `json:"created_at"`
+	UpdatedAt        string         `json:"updated_at"`
 }
 
 type Registry struct {
-	Version  string             `json:"version"`
-	Sessions map[string]Binding `json:"sessions"`
+	Version  string    `json:"version"`
+	Bindings []Binding `json:"bindings"`
 }
 
 func NewRegistry() Registry {
-	return Registry{Version: Version, Sessions: map[string]Binding{}}
+	return Registry{Version: Version, Bindings: []Binding{}}
 }
 
 func Path(configPath, explicit string) (string, error) {
@@ -74,8 +76,8 @@ func Load(path string) (Registry, error) {
 	if registry.Version != Version {
 		return Registry{}, fmt.Errorf("unsupported session registry version %q", registry.Version)
 	}
-	if registry.Sessions == nil {
-		registry.Sessions = map[string]Binding{}
+	if registry.Bindings == nil {
+		registry.Bindings = []Binding{}
 	}
 	return registry, nil
 }
@@ -118,6 +120,9 @@ func Save(path string, registry Registry) error {
 }
 
 func Bind(registry *Registry, binding Binding) (Binding, error) {
+	if strings.TrimSpace(binding.Provider) == "" {
+		return Binding{}, errors.New("provider is required")
+	}
 	if strings.TrimSpace(binding.SessionID) == "" {
 		return Binding{}, errors.New("session_id is required")
 	}
@@ -139,35 +144,50 @@ func Bind(registry *Registry, binding Binding) (Binding, error) {
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if existing, found := registry.Sessions[binding.SessionID]; found {
-		binding.CreatedAt = existing.CreatedAt
-	} else {
-		binding.CreatedAt = now
+	for index, existing := range registry.Bindings {
+		if existing.Provider == binding.Provider && existing.SessionID == binding.SessionID {
+			binding.CreatedAt = existing.CreatedAt
+			binding.UpdatedAt = now
+			registry.Bindings[index] = binding
+			return binding, nil
+		}
 	}
+	binding.CreatedAt = now
 	binding.UpdatedAt = now
-	registry.Sessions[binding.SessionID] = binding
+	registry.Bindings = append(registry.Bindings, binding)
 	return binding, nil
 }
 
-func Get(registry Registry, sessionID string) (Binding, bool) {
-	binding, found := registry.Sessions[sessionID]
-	return binding, found
-}
-
-func Remove(registry *Registry, sessionID string) bool {
-	if _, found := registry.Sessions[sessionID]; !found {
-		return false
+func Get(registry Registry, provider, sessionID string) (Binding, bool) {
+	for _, binding := range registry.Bindings {
+		if binding.Provider == provider && binding.SessionID == sessionID {
+			return binding, true
+		}
 	}
-	delete(registry.Sessions, sessionID)
-	return true
+	return Binding{}, false
 }
 
-func List(registry Registry) []Binding {
-	bindings := make([]Binding, 0, len(registry.Sessions))
-	for _, binding := range registry.Sessions {
-		bindings = append(bindings, binding)
+func Remove(registry *Registry, provider, sessionID string) bool {
+	for index, binding := range registry.Bindings {
+		if binding.Provider == provider && binding.SessionID == sessionID {
+			registry.Bindings = append(registry.Bindings[:index], registry.Bindings[index+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+func List(registry Registry, provider string) []Binding {
+	bindings := make([]Binding, 0, len(registry.Bindings))
+	for _, binding := range registry.Bindings {
+		if provider == "" || binding.Provider == provider {
+			bindings = append(bindings, binding)
+		}
 	}
 	sort.Slice(bindings, func(left, right int) bool {
+		if bindings[left].Provider != bindings[right].Provider {
+			return bindings[left].Provider < bindings[right].Provider
+		}
 		return bindings[left].SessionID < bindings[right].SessionID
 	})
 	return bindings

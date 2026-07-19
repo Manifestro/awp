@@ -1,12 +1,12 @@
 # AWP example backend
 
-A protocol-aware FastAPI implementation of an AWP Service MVP. It exists for interoperability development and local end-to-end tests with the Go client.
+A protocol-aware FastAPI example showing how an MCP or API provider can add its own AWP endpoint. It exists for interoperability development and local end-to-end tests with the Go client; it is not a central AWP relay.
 
-This is a local transport example. Before implementing a durable or production AWP Service, read the full [backend implementation guide](../../docs/HOW_TO_CREATE_AWP_BACKEND.md).
+This is a local transport example. Before implementing a durable production provider endpoint, read the full [backend implementation guide](../../docs/HOW_TO_CREATE_AWP_BACKEND.md).
 
 The example implements:
 
-- authenticated WebSocket connections at `/ws`;
+- authenticated WebSocket connections at `/awp`;
 - `client.hello` and `server.welcome`;
 - `session.bind` and `session.bound`;
 - authenticated `event.publish` at `POST /events`;
@@ -35,8 +35,10 @@ The API documentation is available at <http://localhost:8000/docs> and health in
 export AWP_TOKEN=local-dev-token
 
 awp config set \
-  --service-url ws://localhost:8000/ws \
+  --provider example \
+  --service-url ws://localhost:8000/awp \
   --device-id dev_macbook_01 \
+  --token-env AWP_TOKEN \
   --config /tmp/awp-example.json \
   --json
 ```
@@ -46,6 +48,7 @@ Bind the public AWP session identifier to a local Codex CLI session. Replace the
 ```bash
 awp sessions bind \
   --config /tmp/awp-example.json \
+  --provider example \
   --session-id ses_01JABC123 \
   --adapter codex \
   --runtime-session-id 019f79c6-0c42-76a3-8812-8ec8b77d3e66 \
@@ -73,7 +76,7 @@ curl -X POST http://localhost:8000/events \
   --data @../../docs/examples/05-event-publish-sinores.json
 ```
 
-The service returns `202 Accepted` with a delivery identifier. If the device is online, it immediately sends `event.deliver`; otherwise the event remains in the in-memory pending queue until that device reconnects.
+The example provider returns `202 Accepted` with a delivery identifier. If the device is online, it immediately sends `event.deliver`; otherwise the event remains in the in-memory pending queue until that device reconnects.
 
 ## Security
 

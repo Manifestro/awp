@@ -4,14 +4,20 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Manifestro/awp/internal/autostart"
 	"github.com/Manifestro/awp/internal/config"
+	"github.com/Manifestro/awp/internal/protocol"
 	"github.com/Manifestro/awp/internal/sessions"
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 )
 
 func TestConfigSetJSONErrorReturnsFailure(t *testing.T) {
@@ -21,8 +27,10 @@ func TestConfigSetJSONErrorReturnsFailure(t *testing.T) {
 
 	exitCode := Run([]string{
 		"config", "set",
-		"--service-url", "ws://example.com/ws",
+		"--provider", "example",
+		"--service-url", "ws://example.com/awp",
 		"--device-id", "dev_test",
+		"--token-env", "EXAMPLE_TOKEN",
 		"--config", path,
 		"--json",
 	}, &stdout, &stderr)
@@ -41,9 +49,95 @@ func TestConfigSetJSONErrorReturnsFailure(t *testing.T) {
 	}
 }
 
+func TestDaemonConnectsEveryProviderIndependently(t *testing.T) {
+	newProvider := func() (*httptest.Server, <-chan string) {
+		bound := make(chan string, 1)
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			connection, err := websocket.Accept(writer, request, nil)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer connection.CloseNow()
+			var hello protocol.Message
+			if err := wsjson.Read(request.Context(), connection, &hello); err != nil {
+				return
+			}
+			welcome, err := protocol.New(protocol.ActionServerWelcome, map[string]any{"device_id": "dev_multi_provider"})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if err := wsjson.Write(request.Context(), connection, welcome); err != nil {
+				return
+			}
+			var binding protocol.Message
+			if err := wsjson.Read(request.Context(), connection, &binding); err != nil {
+				return
+			}
+			data, err := protocol.DecodeData[protocol.SessionBindData](binding)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			bound <- data.SessionID
+			<-request.Context().Done()
+		}))
+		return server, bound
+	}
+	firstServer, firstBound := newProvider()
+	defer firstServer.Close()
+	secondServer, secondBound := newProvider()
+	defer secondServer.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	storePath := filepath.Join(t.TempDir(), "sessions.json")
+	cfg := config.Config{Version: config.Version, DeviceID: "dev_multi_provider", Providers: map[string]config.Provider{
+		"first":  {ServiceURL: "ws" + strings.TrimPrefix(firstServer.URL, "http"), TokenEnv: "FIRST_TOKEN"},
+		"second": {ServiceURL: "ws" + strings.TrimPrefix(secondServer.URL, "http"), TokenEnv: "SECOND_TOKEN"},
+	}}
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	registry := sessions.NewRegistry()
+	for _, binding := range []sessions.Binding{
+		{Provider: "first", SessionID: "ses_first", Adapter: "codex", RuntimeSessionID: "runtime_first"},
+		{Provider: "second", SessionID: "ses_second", Adapter: "codex", RuntimeSessionID: "runtime_second"},
+	} {
+		if _, err := sessions.Bind(&registry, binding); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sessions.Save(storePath, registry); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FIRST_TOKEN", "first-secret")
+	t.Setenv("SECOND_TOKEN", "second-secret")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"daemon", "--config", configPath, "--store", storePath, "--timeout", "250ms", "--json"}, &stdout, &stderr)
+	if code != 1 || !strings.Contains(stdout.String(), `"code":"timeout"`) {
+		t.Fatalf("daemon code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	for name, channel := range map[string]<-chan string{"first": firstBound, "second": secondBound} {
+		select {
+		case sessionID := <-channel:
+			if sessionID != "ses_"+name {
+				t.Fatalf("provider %s bound session %s", name, sessionID)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("provider %s did not receive its independent binding", name)
+		}
+	}
+}
+
 func TestSessionsBindListAndRemove(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
 	store := filepath.Join(t.TempDir(), "sessions.json")
 	workspace := t.TempDir()
+	if err := config.Save(configPath, config.Config{Version: config.Version, DeviceID: "dev_test", Providers: map[string]config.Provider{"example": {ServiceURL: "wss://example.com/awp", TokenEnv: "EXAMPLE_TOKEN"}}}); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, test := range []struct {
 		name string
@@ -51,15 +145,15 @@ func TestSessionsBindListAndRemove(t *testing.T) {
 	}{
 		{
 			name: "bind",
-			args: []string{"sessions", "bind", "--session-id", "ses_test", "--adapter", "codex", "--runtime-session-id", "runtime_test", "--workspace", workspace, "--store", store, "--json"},
+			args: []string{"sessions", "bind", "--provider", "example", "--session-id", "ses_test", "--adapter", "codex", "--runtime-session-id", "runtime_test", "--workspace", workspace, "--config", configPath, "--store", store, "--json"},
 		},
 		{
 			name: "list",
-			args: []string{"sessions", "list", "--store", store, "--json"},
+			args: []string{"sessions", "list", "--provider", "example", "--store", store, "--json"},
 		},
 		{
 			name: "remove",
-			args: []string{"sessions", "remove", "--session-id", "ses_test", "--store", store, "--json"},
+			args: []string{"sessions", "remove", "--provider", "example", "--session-id", "ses_test", "--store", store, "--json"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -85,11 +179,11 @@ func TestAutostartEnableIsOptInAndEditable(t *testing.T) {
 	directory := t.TempDir()
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	storePath := filepath.Join(t.TempDir(), "sessions.json")
-	if err := config.Save(configPath, config.Config{Version: "0.1", ServiceURL: "wss://awp.example.com/ws", DeviceID: "dev_test", TokenEnv: "AWP_TEST_TOKEN"}); err != nil {
+	if err := config.Save(configPath, config.Config{Version: config.Version, DeviceID: "dev_test", Providers: map[string]config.Provider{"example": {ServiceURL: "wss://example.com/awp", TokenEnv: "AWP_TEST_TOKEN"}}}); err != nil {
 		t.Fatal(err)
 	}
 	registry := sessions.NewRegistry()
-	if _, err := sessions.Bind(&registry, sessions.Binding{SessionID: "ses_test", Adapter: "codex", RuntimeSessionID: "runtime_test"}); err != nil {
+	if _, err := sessions.Bind(&registry, sessions.Binding{Provider: "example", SessionID: "ses_test", Adapter: "codex", RuntimeSessionID: "runtime_test"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sessions.Save(storePath, registry); err != nil {

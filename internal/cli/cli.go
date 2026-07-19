@@ -74,6 +74,7 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("connect", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "config file path")
+	providerName := flags.String("provider", "", "AWP provider name")
 	jsonOutput := flags.Bool("json", false, "print received messages as JSON Lines")
 	once := flags.Bool("once", false, "exit after acknowledging one event.deliver message")
 	timeout := flags.Duration("timeout", 0, "optional connection timeout, for example 30s")
@@ -98,20 +99,16 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	if err := config.Validate(cfg); err != nil {
 		return commandError("connect", "invalid_config", err, *jsonOutput, stdout, stderr)
 	}
-	token := os.Getenv(cfg.TokenEnv)
-	if *tokenFile != "" {
-		contents, readErr := os.ReadFile(*tokenFile)
-		if readErr != nil {
-			return commandError("connect", "token_file_read", readErr, *jsonOutput, stdout, stderr)
-		}
-		token = strings.TrimSpace(string(contents))
+	if *providerName == "" {
+		return commandError("connect", "provider_required", errors.New("--provider is required"), *jsonOutput, stdout, stderr)
 	}
-	if token == "" {
-		source := cfg.TokenEnv + " is not set"
-		if *tokenFile != "" {
-			source = *tokenFile + " is empty"
-		}
-		return commandError("connect", "token_missing", errors.New(source), *jsonOutput, stdout, stderr)
+	provider, found := cfg.Providers[*providerName]
+	if !found {
+		return commandError("connect", "provider_not_found", fmt.Errorf("provider %q is not configured", *providerName), *jsonOutput, stdout, stderr)
+	}
+	token, err := loadToken(provider.TokenEnv, *tokenFile)
+	if err != nil {
+		return commandError("connect", "token_missing", err, *jsonOutput, stdout, stderr)
 	}
 
 	ctx := context.Background()
@@ -129,6 +126,7 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		return nil
 	}
 	var adapterName string
+	var clientSessions []client.SessionRegistration
 	var handle func(context.Context, protocol.DeliveryData) error
 	if *sessionID != "" {
 		registryPath, err := sessions.Path(*configPath, *storePath)
@@ -139,7 +137,7 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return commandError("connect", "registry_read", err, *jsonOutput, stdout, stderr)
 		}
-		binding, found := sessions.Get(registry, *sessionID)
+		binding, found := sessions.Get(registry, *providerName, *sessionID)
 		if !found {
 			return commandError("connect", "session_not_bound", fmt.Errorf("AWP session %s is not bound locally", *sessionID), *jsonOutput, stdout, stderr)
 		}
@@ -148,19 +146,22 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 			return commandError("connect", "adapter_unavailable", err, *jsonOutput, stdout, stderr)
 		}
 		adapterName = binding.Adapter
+		clientSessions = []client.SessionRegistration{{SessionID: binding.SessionID, Adapter: binding.Adapter, Metadata: binding.Metadata}}
 		handle = func(ctx context.Context, delivery protocol.DeliveryData) error {
 			return resolved.Run(ctx, binding, delivery)
 		}
 	}
 	clientOptions := client.Options{
-		Config:    cfg,
-		Token:     token,
-		Version:   Version,
-		SessionID: *sessionID,
-		Adapter:   adapterName,
-		Once:      *once,
-		Receive:   receive,
-		Handle:    handle,
+		ServiceURL: provider.ServiceURL,
+		DeviceID:   cfg.DeviceID,
+		Token:      token,
+		Version:    Version,
+		SessionID:  *sessionID,
+		Adapter:    adapterName,
+		Sessions:   clientSessions,
+		Once:       *once,
+		Receive:    receive,
+		Handle:     handle,
 	}
 	if *reconnect {
 		err = client.RunWithReconnect(ctx, clientOptions, client.ReconnectPolicy{
@@ -196,7 +197,7 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 
 func runConfig(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "config requires a subcommand: set or show")
+		fmt.Fprintln(stderr, "config requires a subcommand: set, show, or remove")
 		return 2
 	}
 	switch args[0] {
@@ -204,6 +205,8 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 		return runConfigSet(args[1:], stdout, stderr)
 	case "show":
 		return runConfigShow(args[1:], stdout, stderr)
+	case "remove":
+		return runConfigRemove(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown config subcommand %q\n", args[0])
 		return 2
@@ -213,9 +216,10 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 func runConfigSet(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("config set", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	serviceURL := flags.String("service-url", "", "AWP Service WebSocket URL")
-	deviceID := flags.String("device-id", "", "opaque AWP device identifier")
-	tokenEnv := flags.String("token-env", "AWP_TOKEN", "environment variable containing the bearer token")
+	serviceURL := flags.String("service-url", "", "provider-owned AWP WebSocket URL")
+	providerName := flags.String("provider", "", "provider name, for example sinores")
+	deviceID := flags.String("device-id", "", "opaque AWP device identifier; required for the first provider")
+	tokenEnv := flags.String("token-env", "", "environment variable containing this provider's bearer token")
 	configPath := flags.String("config", "", "config file path")
 	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
 	if err := flags.Parse(args); err != nil {
@@ -226,16 +230,27 @@ func runConfigSet(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return commandError("config.set", "config_path", err, *jsonOutput, stdout, stderr)
 	}
-	cfg := config.Config{Version: "0.1", ServiceURL: *serviceURL, DeviceID: *deviceID, TokenEnv: *tokenEnv}
+	cfg := config.Default()
+	if existing, loadErr := config.Load(path); loadErr == nil {
+		cfg = existing
+	} else if !errors.Is(loadErr, os.ErrNotExist) {
+		return commandError("config.set", "config_read", loadErr, *jsonOutput, stdout, stderr)
+	}
+	if *deviceID != "" {
+		cfg.DeviceID = *deviceID
+	}
+	if err := config.SetProvider(&cfg, *providerName, config.Provider{ServiceURL: *serviceURL, TokenEnv: *tokenEnv}); err != nil {
+		return commandError("config.set", "invalid_provider", err, *jsonOutput, stdout, stderr)
+	}
 	if err := config.Save(path, cfg); err != nil {
 		return commandError("config.set", "invalid_config", err, *jsonOutput, stdout, stderr)
 	}
 
-	data := map[string]any{"path": path, "config": cfg}
+	data := map[string]any{"path": path, "provider": *providerName, "config": cfg}
 	if *jsonOutput {
 		return writeJSON(stdout, result{OK: true, Command: "config.set", Data: data})
 	}
-	fmt.Fprintf(stdout, "Configuration saved to %s\n", path)
+	fmt.Fprintf(stdout, "Provider %s saved to %s\n", *providerName, path)
 	return 0
 }
 
@@ -260,7 +275,47 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 	if *jsonOutput {
 		return writeJSON(stdout, result{OK: true, Command: "config.show", Data: map[string]any{"path": path, "config": cfg}})
 	}
-	fmt.Fprintf(stdout, "Config: %s\nService: %s\nDevice: %s\nToken environment: %s\n", path, cfg.ServiceURL, cfg.DeviceID, cfg.TokenEnv)
+	fmt.Fprintf(stdout, "Config: %s\nDevice: %s\n", path, cfg.DeviceID)
+	for name, provider := range cfg.Providers {
+		fmt.Fprintf(stdout, "Provider: %s\n  Service: %s\n  Token environment: %s\n", name, provider.ServiceURL, provider.TokenEnv)
+	}
+	return 0
+}
+
+func runConfigRemove(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("config remove", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	providerName := flags.String("provider", "", "provider name")
+	configPath := flags.String("config", "", "config file path")
+	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if *providerName == "" {
+		return commandError("config.remove", "provider_required", errors.New("--provider is required"), *jsonOutput, stdout, stderr)
+	}
+	path, err := config.Path(*configPath)
+	if err != nil {
+		return commandError("config.remove", "config_path", err, *jsonOutput, stdout, stderr)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return commandError("config.remove", "config_read", err, *jsonOutput, stdout, stderr)
+	}
+	_, removed := cfg.Providers[*providerName]
+	delete(cfg.Providers, *providerName)
+	if removed {
+		if len(cfg.Providers) == 0 {
+			return commandError("config.remove", "last_provider", errors.New("cannot remove the last provider; add another provider first"), *jsonOutput, stdout, stderr)
+		}
+		if err := config.Save(path, cfg); err != nil {
+			return commandError("config.remove", "config_write", err, *jsonOutput, stdout, stderr)
+		}
+	}
+	if *jsonOutput {
+		return writeJSON(stdout, result{OK: true, Command: "config.remove", Data: map[string]any{"path": path, "provider": *providerName, "removed": removed}})
+	}
+	fmt.Fprintf(stdout, "Provider %s removed=%t\n", *providerName, removed)
 	return 0
 }
 
@@ -274,7 +329,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	}
 
 	path, pathErr := config.Path(*configPath)
-	checks := make([]check, 0, 4)
+	checks := make([]check, 0, 8)
 	var cfg config.Config
 	if pathErr != nil {
 		checks = append(checks, check{Name: "config", OK: false, Message: pathErr.Error()})
@@ -290,12 +345,14 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	if cfg.TokenEnv == "" {
-		checks = append(checks, check{Name: "token", OK: false, Message: "token environment is not configured"})
-	} else if os.Getenv(cfg.TokenEnv) == "" {
-		checks = append(checks, check{Name: "token", OK: false, Message: cfg.TokenEnv + " is not set"})
-	} else {
-		checks = append(checks, check{Name: "token", OK: true, Message: cfg.TokenEnv + " is set"})
+	providerChecks := 0
+	for name, provider := range cfg.Providers {
+		providerChecks++
+		if os.Getenv(provider.TokenEnv) == "" {
+			checks = append(checks, check{Name: "provider:" + name, OK: false, Message: provider.TokenEnv + " is not set"})
+		} else {
+			checks = append(checks, check{Name: "provider:" + name, OK: true, Message: provider.ServiceURL + " using " + provider.TokenEnv})
+		}
 	}
 
 	codexCheck := executableCheck("codex")
@@ -306,6 +363,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		if !item.OK {
 			ok = false
 		}
+	}
+	if providerChecks == 0 {
+		ok = false
 	}
 	if !codexCheck.OK && !claudeCheck.OK {
 		ok = false
@@ -364,21 +424,22 @@ func printUsage(writer io.Writer) {
 
 Usage:
   awp version [--json]
-  awp config set --service-url <wss://...> --device-id <id> [--token-env AWP_TOKEN] [--config <path>] [--json]
+  awp config set --provider <name> --service-url <wss://.../awp> --token-env <ENV> [--device-id <id>] [--config <path>] [--json]
   awp config show [--config <path>] [--json]
+  awp config remove --provider <name> [--config <path>] [--json]
   awp doctor [--config <path>] [--json]
-  awp sessions bind --session-id <id> --adapter codex --runtime-session-id <id> [--workspace <path>] [--json]
-  awp sessions list [--json]
-  awp sessions remove --session-id <id> [--json]
-  awp daemon [--config <path>] [--store <path>] [--token-file <path>] [--once] [--timeout 30s] [--json]
+  awp sessions bind --provider <name> --session-id <id> --adapter codex --runtime-session-id <id> [--workspace <path>] [--metadata-json <object>] [--json]
+  awp sessions list [--provider <name>] [--json]
+  awp sessions remove --provider <name> --session-id <id> [--json]
+  awp daemon [--config <path>] [--store <path>] [--token-dir <path>] [--once] [--timeout 30s] [--json]
   awp autostart enable [--start-now] [--json]
   awp autostart status [--json]
   awp autostart disable [--json]
-  awp connect [--config <path>] [--session-id <id>] [--store <path>] [--token-file <path>] [--reconnect] [--once] [--timeout 30s] [--json]
+  awp connect --provider <name> [--config <path>] [--session-id <id>] [--store <path>] [--token-file <path>] [--reconnect] [--once] [--timeout 30s] [--json]
 
 Environment:
   AWP_CONFIG  Override the default configuration path.
   AWP_SESSIONS Override the default session registry path.
-  AWP_TOKEN   Default bearer token environment variable.
+  Provider token environment variables are configured per provider.
 `)+"\n")
 }

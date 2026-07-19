@@ -1,31 +1,33 @@
 # How to Build an AWP Backend
 
 Status: implementation guide for AWP `0.1` draft  
-Audience: engineers building an AWP Service or integrating an Event Server  
+Audience: engineers adding an AWP endpoint to an MCP/API product
 Canonical repository: [Manifestro/awp](https://github.com/Manifestro/awp)
 
-This document describes how to implement a backend compatible with the Agent Wake Protocol (AWP) Go client. It combines the wire protocol requirements with storage, delivery, retry, security, and production guidance.
+This document describes how a product implements its own backend endpoint compatible with the Agent Wake Protocol (AWP) Go client. It combines wire protocol requirements with storage, delivery, retry, security, and production guidance.
 
-AWP is vendor-neutral. The backend MUST NOT contain Codex-, Claude Code-, Sinores-, WhatsApp-, or IDE-specific resume logic. Runtime session identifiers and runtime credentials remain on the local AWP Client.
+AWP has no required central server. If a product exposes `https://provider.example/mcp`, that same product can expose `wss://provider.example/awp`. The local daemon connects directly and independently to every configured provider.
+
+AWP is runtime-neutral. A provider backend MUST NOT contain Codex-, Claude Code-, or IDE-specific resume logic. Runtime session identifiers and runtime credentials remain on the local AWP Client. The provider may naturally contain its own application logic—for example Sinores understands its WhatsApp events—but AWP transport semantics remain generic.
 
 ## 1. Backend responsibilities
 
-An AWP backend acts as the **AWP Service** between two parties:
+An AWP backend is an event endpoint owned by one MCP/API provider:
 
 ```text
-Event Server ── HTTPS event.publish ──▶ AWP Service
-                                             │
-                                      durable queue
-                                             │
-AWP Client ◀── outbound WebSocket ───────────┘
-     │
-     └── locally resumes Codex, Claude Code, or another runtime
+Provider application ──▶ provider's durable AWP queue
+                                      │
+Local AWP Client ◀── wss://provider.example/awp
+       │
+       └── locally resumes Codex, Claude Code, or another runtime
 ```
+
+Different products operate different endpoints. Sinores does not publish through a shared GitHub or Manifestro relay, and another provider does not publish through Sinores.
 
 The backend MUST:
 
-1. authenticate Event Servers and AWP Clients;
-2. accept and validate `event.publish` messages;
+1. authenticate its AWP Clients and internal event producers;
+2. create or accept and validate its own events;
 3. persist an event before reporting successful publication;
 4. route the event to the target `device_id` and `session_id`;
 5. queue events while the client is offline;
@@ -35,13 +37,15 @@ The backend MUST:
 9. deduplicate repeated publication requests;
 10. preserve the application event payload without interpreting it.
 
-The backend MUST NOT:
+The provider backend MUST NOT:
 
 - receive or store a Codex/Claude runtime session ID;
 - execute a runtime itself;
 - grant new permissions to a resumed agent;
 - require a public IP, domain, or inbound port on the client device;
-- interpret `event.data` as trusted instructions.
+- interpret `event.data` as trusted agent instructions.
+
+The HTTP `POST /events` used by this repository's FastAPI example represents an internal provider publication boundary for testing. A real provider may enqueue AWP events directly from its application and does not need to expose a public generic `/events` endpoint.
 
 ## 2. Protocol and transport
 
@@ -76,21 +80,21 @@ For WebSocket transport:
 - production endpoints MUST use `wss://`;
 - each text frame MUST contain exactly one complete JSON message;
 - binary frames are unsupported in `0.1` and SHOULD cause a protocol error;
-- the service MUST enforce a configured maximum frame/message size;
+- the provider MUST enforce a configured maximum frame/message size;
 - secrets MUST be sent during the HTTP upgrade, not inside AWP messages.
 
 Unknown JSON fields SHOULD be ignored unless accepting them would be unsafe. Missing or invalid required fields MUST be rejected.
 
 ## 3. Authentication and tenancy
 
-The example backend uses one bearer token for local development. A production service MUST use independently revocable credentials and MUST scope every database query by tenant or account.
+The example provider backend uses one bearer token for local development. A production provider MUST use independently revocable credentials and MUST scope every database query by tenant or account.
 
 Recommended credential separation:
 
 | Credential | Used by | Suggested scope |
 | --- | --- | --- |
 | Client token | AWP Client | connect as one tenant/device; bind permitted sessions; acknowledge only its deliveries |
-| Publisher token | Event Server | publish only to permitted tenant, devices, sessions, and event sources |
+| Internal publisher credential | Provider component | enqueue only provider-owned event sources and permitted targets |
 | Admin credential | Control plane | provision, rotate, revoke, inspect, and delete resources |
 
 The reference HTTP form is:
@@ -99,7 +103,7 @@ The reference HTTP form is:
 Authorization: Bearer <token>
 ```
 
-Authentication MUST happen before accepting a WebSocket as an active AWP connection. The service SHOULD return HTTP `401`/`403` before upgrade when the framework permits it; otherwise it SHOULD close with WebSocket policy code `1008`.
+Authentication MUST happen before accepting a WebSocket as an active AWP connection. The provider SHOULD return HTTP `401`/`403` before upgrade when the framework permits it; otherwise it SHOULD close with WebSocket policy code `1008`.
 
 Authorization MUST be checked separately from authentication. Knowing a `device_id`, `session_id`, `event_id`, or `delivery_id` MUST NOT grant access to it.
 
@@ -139,7 +143,7 @@ After the authenticated WebSocket upgrade, the first client message MUST be `cli
 }
 ```
 
-The service SHOULD require this message within 10 seconds. It MUST verify that the authenticated principal owns or may use `device_id`.
+The provider SHOULD require this message within 10 seconds. It MUST verify that the authenticated principal owns or may use `device_id`.
 
 If the hello is valid, reply with `server.welcome`:
 
@@ -159,11 +163,11 @@ If the hello is valid, reply with `server.welcome`:
 }
 ```
 
-`connection_id` identifies this socket instance, not the persistent device. The service MUST remove a connection only if the disconnecting socket is still the current socket for that connection/device.
+`connection_id` identifies this socket instance, not the persistent device. The provider MUST remove a connection only if the disconnecting socket is still the current socket for that connection/device.
 
 ### 4.2 Multiple connections for one device
 
-The service needs an explicit policy. The `0.1` reference behavior is **newest connection wins**:
+The provider needs an explicit policy. The `0.1` reference behavior is **newest connection wins**:
 
 1. atomically register the new connection;
 2. close the previous connection with code `1012`;
@@ -193,7 +197,9 @@ After welcome, the client announces an opaque AWP session:
 }
 ```
 
-The service MUST bind the AWP `session_id` to the authenticated tenant and connected `device_id`. It MAY store the adapter name and metadata for routing and display, but it MUST NOT request the vendor runtime session ID.
+The provider MUST bind the AWP `session_id` to the authenticated tenant and connected `device_id`. It MAY store the adapter name and metadata for routing and display, but it MUST NOT request the vendor runtime session ID.
+
+Provider-defined `session.bind.metadata` may associate application resources with the AWP session—for example `{ "channel_id": "channel_123" }`. Another valid product design is an MCP tool such as `subscribe_awp` that accepts the opaque `awp_session_id` and a provider resource. Whichever mechanism is used, authorization must prove that the principal may bind both the AWP session and the provider resource. Never accept a Codex/Claude runtime ID.
 
 Reply with:
 
@@ -213,9 +219,9 @@ Reply with:
 
 A session already owned by another tenant or device MUST NOT be silently reassigned. Return an error such as `session_conflict`. Rebinding by the same authorized device SHOULD be idempotent.
 
-Bindings SHOULD be durable. An `active` connection is transient; the session identity itself should survive disconnects so Event Servers can publish while the client is offline.
+Bindings SHOULD be durable. An `active` connection is transient; the session identity itself should survive disconnects so the provider can enqueue events while the client is offline.
 
-One device connection may bind multiple sessions. The service MUST support multiple `session.bind` messages after one `server.welcome`; it SHOULD NOT require or create a WebSocket per session. Events from independent systems such as Sinores, GitHub, email, and monitoring can therefore share the transport while remaining isolated by `event.source`, tenant, target device, and target session.
+One connection to this provider may bind multiple sessions. The provider MUST support multiple `session.bind` messages after one `server.welcome`; it SHOULD NOT require or create a WebSocket per session. Events belonging to a different provider travel over that other provider's independent AWP connection.
 
 ### 4.4 Heartbeats
 
@@ -247,11 +253,11 @@ The receiver replies:
 }
 ```
 
-The service SHOULD close stale sockets after a documented number of missed heartbeat intervals. WebSocket control-frame ping/pong MAY also be used, but it does not replace the AWP heartbeat when protocol-level liveness is needed.
+The provider SHOULD close stale sockets after a documented number of missed heartbeat intervals. WebSocket control-frame ping/pong MAY also be used, but it does not replace the AWP heartbeat when protocol-level liveness is needed.
 
 ## 5. Publishing events
 
-The minimum HTTP endpoint is:
+If the provider exposes an HTTP boundary between its application and AWP delivery component, the example form is:
 
 ```http
 POST /events
@@ -298,7 +304,7 @@ Required validation:
 - message and application payload sizes are within configured limits;
 - JSON nesting, strings, and collection sizes are bounded to prevent resource exhaustion.
 
-The service MUST treat `event.data` as opaque untrusted JSON and preserve it semantically. It MUST NOT execute, template, or evaluate values from the payload.
+The provider MUST treat `event.data` as opaque untrusted JSON and preserve it semantically. It MUST NOT execute, template, or evaluate values from the payload.
 
 ### 5.1 Persist before responding
 
@@ -344,7 +350,7 @@ Recommended responses:
 
 ## 6. Delivery construction and routing
 
-The service creates `event.deliver`; an Event Server MUST NOT choose `delivery_id` or `attempt`:
+The provider's AWP delivery component creates `event.deliver`; an upstream application component MUST NOT choose `delivery_id` or `attempt`:
 
 ```json
 {
@@ -374,9 +380,9 @@ The service creates `event.deliver`; an Event Server MUST NOT choose `delivery_i
 }
 ```
 
-The tuple `(tenant_id, device_id, session_id)` is the routing boundary. Before every send, the service MUST verify that the current socket belongs to the same authenticated tenant and device as the delivery.
+The tuple `(tenant_id, device_id, session_id)` is the routing boundary inside one provider. Before every send, the provider MUST verify that the current socket belongs to the same authenticated tenant and device as the delivery.
 
-The service MUST reuse the same `delivery_id` when retrying the same delivery. It SHOULD create a new envelope message `id` and increment `attempt` for each new delivery attempt. The original event contents MUST not change.
+The provider MUST reuse the same `delivery_id` when retrying the same delivery. It SHOULD create a new envelope message `id` and increment `attempt` for each new delivery attempt. The original event contents MUST not change.
 
 Do not hold a global application lock while performing network I/O. Resolve the current connection and claim work atomically, release the lock/transaction, then send. A failed send returns the delivery to retryable state.
 
@@ -406,7 +412,7 @@ Statuses:
 
 | Status | Meaning | Network redelivery |
 | --- | --- | --- |
-| `pending` | Internal service state; not yet safely acknowledged. | Allowed. |
+| `pending` | Internal provider state; not yet safely acknowledged. | Allowed. |
 | `accepted` | Client durably accepted responsibility for local processing. | Stop. |
 | `completed` | Runtime finished processing successfully. | Stop. |
 | `failed` | Client/runtime attempted processing and failed. | Policy-dependent; do not blindly retry forever. |
@@ -453,7 +459,7 @@ The backend SHOULD also make acknowledgement handling idempotent by storing a tr
 
 When a target device has no current connection, publication still succeeds after persistence and remains `pending`.
 
-On a valid `client.hello`, the service SHOULD schedule pending deliveries for that tenant/device. Ordering policy must be documented. FIFO by creation time is a reasonable default, but strict global ordering is not required by AWP `0.1`.
+On a valid `client.hello`, the provider SHOULD schedule pending deliveries for that tenant/device. Ordering policy must be documented. FIFO by creation time is a reasonable default, but strict global ordering is not required by AWP `0.1`.
 
 A production retry record SHOULD contain:
 
@@ -544,7 +550,7 @@ The example FastAPI backend stores connections and deliveries in one process. Do
 A horizontally scaled backend needs three layers:
 
 1. **durable database** for devices, sessions, events, deliveries, idempotency, and leases;
-2. **connection ownership registry** mapping a tenant/device to a live service instance and connection ID, usually with TTL/heartbeats;
+2. **connection ownership registry** mapping a tenant/device to a live provider-backend instance and connection ID, usually with TTL/heartbeats;
 3. **inter-instance notification bus** so an HTTP publisher or queue worker can notify the instance holding the target socket.
 
 Examples of suitable building blocks are PostgreSQL for durable records and Redis/NATS/Kafka for notifications. The notification bus is not the source of truth; loss of a notification must be recoverable by scanning durable pending deliveries.
@@ -620,7 +626,7 @@ An AWP event can wake an agent, so the backend is part of a security boundary.
 - Support retention and deletion policies for events and diagnostics.
 - Do not interpret event text as trusted system/developer instructions. The AWP Client also marks the event as untrusted when resuming the runtime.
 
-For internet-facing Event Servers, request signing can be added in addition to bearer authentication. A typical design signs the HTTP method, path, timestamp, nonce, and exact body hash, rejects stale timestamps, and stores recent nonces to block replay. Signature details are not yet standardized in AWP `0.1`.
+If a provider exposes an internet-facing publication API to trusted integrations, request signing can be added in addition to bearer authentication. A typical design signs the HTTP method, path, timestamp, nonce, and exact body hash, rejects stale timestamps, and stores recent nonces to block replay. Signature details are not yet standardized in AWP `0.1`.
 
 ## 14. Observability and operations
 
@@ -660,7 +666,7 @@ A practical build order is:
 10. heartbeat and stale-connection cleanup;
 11. metrics, audit logs, limits, rotation, and horizontal scaling.
 
-The repository's [`example/backend`](../example/backend) implements the local transport flow using FastAPI and in-memory state. It is intentionally not a production template for persistence or scaling.
+The repository's [`example/backend`](../example/backend) demonstrates one provider-owned AWP endpoint using FastAPI and in-memory state. It is intentionally not a central relay and not a production template for persistence or scaling.
 
 ## 16. Compatibility test checklist
 
@@ -686,7 +692,7 @@ Before calling a backend AWP `0.1` compatible, test at least:
 - invalid and oversized WebSocket messages are bounded/rejected;
 - heartbeat timeout removes only the stale connection;
 - restart does not lose sessions, pending deliveries, or idempotency records;
-- two service instances cannot concurrently claim the same delivery;
+- two provider-backend instances cannot concurrently claim the same delivery;
 - application `event.data` survives publish/deliver without semantic changes.
 
 Canonical wire examples are available in [`docs/examples`](./examples), and the concise action reference is in [`docs/PROTOCOL.md`](./PROTOCOL.md).
@@ -708,6 +714,6 @@ AWP `0.1` does not yet standardize:
 
 Backends may add these features, but extensions MUST preserve the core envelope, MUST remain tenant-safe, and SHOULD be capability-negotiated or namespaced so they do not break `0.1` clients.
 
-The central interoperability rule is simple:
+The core interoperability rule is simple:
 
-> Persist and route opaque external events to an authenticated AWP session, while keeping runtime-specific identity and execution entirely on the local client.
+> Each provider persists and routes its own events through its own authenticated AWP endpoint, while runtime-specific identity and execution stay entirely on the local client.
