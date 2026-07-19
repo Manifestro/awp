@@ -266,4 +266,8 @@ AWP is being developed in public by [Manifestro](https://github.com/Manifestro).
 
 ## License
 
-A license has not been selected yet. Until a license file is added, the repository is source-available but does not grant an open-source license.
+Copyright 2026 Manifestro.
+
+Licensed under the [Apache License, Version 2.0](./LICENSE).
+
+[awp.manifestro.io](https://awp.manifestro.io) · Apache-2.0
