@@ -81,13 +81,16 @@ Immediately after opening a WebSocket, the client sends `client.hello`. No other
     },
     "capabilities": {
       "adapters": ["codex", "claude-code"],
-      "resume": true
+      "resume": true,
+      "permissions": true
     }
   }
 }
 ```
 
 Authentication SHOULD be performed during the HTTP WebSocket upgrade, for example with an `Authorization: Bearer <token>` header. Secrets MUST NOT be placed in an AWP message.
+
+Providers that require the AWP permission flow MUST verify `capabilities.permissions=true`. They SHOULD return an `upgrade_required` error and close cleanly instead of sending `permission.request` to an older client that cannot process it.
 
 ### 2. Server welcome
 
@@ -122,7 +125,40 @@ The provider confirms the binding with `session.bound`. Bindings MAY expire and 
 
 A client MAY send multiple `session.bind` messages on the same provider connection. A provider MUST route each delivery by both `device_id` and `session_id`; it MUST NOT require a separate WebSocket connection per session. The local daemon uses a separate connection for each provider, and a provider failure MUST NOT affect other provider connections.
 
-### 4. Event publication
+### 4. Permission request
+
+After `session.bound` and before any delivery for that session, the provider MUST send `permission.request`. The request declares the minimum background capabilities and provider MCP tools that may be needed when the session wakes.
+
+```json
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_permission_01",
+  "action": "permission.request",
+  "timestamp": "2026-07-19T15:00:00Z",
+  "data": {
+    "request_id": "req_sinores_01",
+    "session_id": "ses_01JABC123",
+    "permissions": [
+      {
+        "id": "runtime.wake",
+        "title": "Wake this Codex session",
+        "risk": "runtime",
+        "delegation": "background",
+        "mcp_tools": []
+      }
+    ]
+  }
+}
+```
+
+The request MUST contain `runtime.wake`. Risk values are `runtime`, `read`, `write`, and `sensitive`. Delegation values are `background` and `interactive-only`. A background client MUST NOT grant an `interactive-only` permission.
+
+The provider MUST resend its current request after reconnect and rebind. It MUST send the request before replaying pending deliveries. Receiving a request does not grant it: grants remain local and are never inferred from provider data.
+
+See [PERMISSIONS.md](./PERMISSIONS.md) for grants, definition hashes, scopes, and runtime isolation.
+
+### 5. Event publication
 
 The provider creates an event. When the provider separates event-producing components from its AWP endpoint, an internal Event Server MAY send `event.publish` to that provider's AWP backend. A public HTTP publication endpoint is an implementation choice, not a required central AWP API.
 
@@ -139,7 +175,7 @@ The target is part of the action data:
 
 `device_id` and `session_id` identify the destination inside this provider. The event-specific payload is stored in `data.event.data` and is not interpreted by the AWP transport.
 
-### 5. Event delivery
+### 6. Event delivery
 
 The provider validates and persists the event, creates a `delivery_id`, and sends `event.deliver` to the connected client.
 
@@ -157,7 +193,7 @@ Every `event.deliver.data` object MUST contain all of these fields:
 
 Delivery semantics are at least once. The provider MAY send the same `delivery_id` again until it receives an acknowledgement.
 
-### 6. Delivery acknowledgement
+### 7. Delivery acknowledgement
 
 After safely accepting the event for local processing, the client sends `event.ack`.
 
@@ -190,6 +226,7 @@ This mapping is local state and is not an AWP wire message.
 | Provider → Client | `server.welcome` | Accept the client and negotiate connection settings. |
 | Client → Provider | `session.bind` | Register a local agent session with this provider. |
 | Provider → Client | `session.bound` | Confirm the session binding. |
+| Provider → Client | `permission.request` | Declare permissions required to wake this session. |
 | Provider internal | `event.publish` | Optionally publish an internally created event into the provider's AWP backend. |
 | Provider → Client | `event.deliver` | Deliver a persisted provider event. |
 | Client → Provider | `event.ack` | Acknowledge delivery or report its outcome. |

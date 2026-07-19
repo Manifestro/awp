@@ -226,6 +226,62 @@ func TestConcurrentDeliveryDoesNotBlockHeartbeat(t *testing.T) {
 	}
 }
 
+func TestRunStopsAfterProviderPermissionRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer connection.CloseNow()
+		var hello protocol.Message
+		if err := wsjson.Read(request.Context(), connection, &hello); err != nil {
+			t.Error(err)
+			return
+		}
+		helloData, err := protocol.DecodeData[protocol.ClientHelloData](hello)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if !helloData.Capabilities.Permissions {
+			t.Error("client did not advertise permission capability")
+			return
+		}
+		if err := wsjson.Write(request.Context(), connection, mustMessage(t, protocol.ActionServerWelcome, map[string]any{"device_id": "dev_permissions"})); err != nil {
+			t.Error(err)
+			return
+		}
+		var bind protocol.Message
+		if err := wsjson.Read(request.Context(), connection, &bind); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := wsjson.Write(request.Context(), connection, mustMessage(t, protocol.ActionSessionBound, map[string]any{"session_id": "ses_permissions", "status": "active"})); err != nil {
+			t.Error(err)
+			return
+		}
+		requestData := protocol.PermissionRequestData{RequestID: "req_test", SessionID: "ses_permissions", Permissions: []protocol.PermissionRequestItem{{ID: "runtime.wake", Title: "Wake", Risk: "runtime", Delegation: "background"}}}
+		if err := wsjson.Write(request.Context(), connection, mustMessage(t, protocol.ActionPermissionRequest, requestData)); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	received := false
+	err := Run(context.Background(), Options{ServiceURL: "ws" + strings.TrimPrefix(server.URL, "http"), DeviceID: "dev_permissions", Version: "test", Sessions: []SessionRegistration{{SessionID: "ses_permissions", Adapter: "codex"}}, StopAfterPermissionRequest: true, Receive: func(message protocol.Message) error {
+		if message.Action == protocol.ActionPermissionRequest {
+			received = true
+		}
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !received {
+		t.Fatal("permission request was not received")
+	}
+}
+
 func mustMessage(t *testing.T, action string, data any) protocol.Message {
 	t.Helper()
 	message, err := protocol.New(action, data)

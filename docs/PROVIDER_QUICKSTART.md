@@ -92,7 +92,7 @@ The first client message is `client.hello`:
     "device_id": "dev_macbook_01",
     "client": {
       "name": "awp-go",
-      "version": "0.1.0-alpha.1"
+      "version": "0.2.0-alpha.1"
     },
     "capabilities": {
       "adapters": ["codex"],
@@ -165,7 +165,45 @@ Persist the binding and confirm it:
 
 One connection may bind multiple sessions. Do not create a WebSocket per session.
 
-## 4. Persist and deliver an event
+## 4. Request permission to wake
+
+After `session.bound`, your provider must send `permission.request` before any queued or live delivery for that session:
+
+```json
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_permission_01",
+  "action": "permission.request",
+  "timestamp": "2026-07-19T15:00:00Z",
+  "data": {
+    "request_id": "req_your_product_01",
+    "session_id": "ses_support",
+    "permissions": [
+      {
+        "id": "runtime.wake",
+        "title": "Wake this agent session",
+        "risk": "runtime",
+        "delegation": "background",
+        "mcp_tools": []
+      },
+      {
+        "id": "messages.read_new",
+        "title": "Read new messages",
+        "risk": "read",
+        "delegation": "background",
+        "mcp_tools": ["get_new_messages"]
+      }
+    ]
+  }
+}
+```
+
+The client stores this as a pending request. Only the user can create a local grant. A provider cannot grant itself permissions by sending an event or changing the request.
+
+Resend the current request after every reconnect and rebind. If a permission definition changes, the old local grant no longer authorizes that permission.
+
+## 5. Persist and deliver an event
 
 When your application receives something relevant, first create a durable event and delivery record. Then send `event.deliver` to the active connection for the target device:
 
@@ -219,7 +257,7 @@ In particular, `delivery_id` and `event_id` must be direct children of `data`. I
 
 Delivery is **at least once**. Keep `event_id` and `delivery_id` stable across retries so the receiver can deduplicate them. If the device is offline, retain the pending delivery and send it after reconnect and handshake.
 
-## 5. Process acknowledgements
+## 6. Process acknowledgements
 
 After the local runtime finishes, the client reports the result:
 
@@ -252,7 +290,7 @@ Supported statuses:
 
 Verify that the acknowledged delivery belongs to the authenticated tenant and connected device. An unknown or cross-tenant delivery ID must never reveal another tenant's state.
 
-## 6. Keep the connection alive
+## 7. Keep the connection alive
 
 Either side may send:
 
@@ -314,6 +352,20 @@ awp sessions bind \
   --runtime-session-id <codex-session-id> \
   --workspace /absolute/path/to/project \
   --metadata-json '{"channel_id":"channel_123"}'
+```
+
+Fetch and review your provider's mandatory permission request:
+
+```bash
+awp permissions request \
+  --provider my-provider \
+  --session-id ses_support
+
+awp permissions grant \
+  --provider my-provider \
+  --session-id ses_support \
+  --allow runtime.wake,messages.read_new \
+  --scope binding
 ```
 
 Validate configuration and start listening:

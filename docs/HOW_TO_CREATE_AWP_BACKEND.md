@@ -223,7 +223,52 @@ Bindings SHOULD be durable. An `active` connection is transient; the session ide
 
 One connection to this provider may bind multiple sessions. The provider MUST support multiple `session.bind` messages after one `server.welcome`; it SHOULD NOT require or create a WebSocket per session. Events belonging to a different provider travel over that other provider's independent AWP connection.
 
-### 4.4 Heartbeats
+### 4.4 Permission request
+
+Immediately after `session.bound`, the provider MUST send `permission.request` for that session. It MUST do so before delivering new or queued events:
+
+```json
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_permission_01",
+  "action": "permission.request",
+  "timestamp": "2026-07-19T15:00:00Z",
+  "data": {
+    "request_id": "req_example_01",
+    "session_id": "ses_01JABC123",
+    "permissions": [
+      {
+        "id": "runtime.wake",
+        "title": "Wake this agent session",
+        "risk": "runtime",
+        "delegation": "background",
+        "mcp_tools": []
+      },
+      {
+        "id": "messages.read_new",
+        "title": "Read new messages",
+        "risk": "read",
+        "delegation": "background",
+        "mcp_tools": ["get_new_messages"]
+      }
+    ]
+  }
+}
+```
+
+Provider requirements:
+
+- every request contains `runtime.wake`;
+- IDs and their risk/tool definitions remain stable;
+- `mcp_tools` names only tools from this provider's MCP server;
+- sensitive actions that require a present user use `interactive-only`;
+- the current request is resent after every reconnect and rebind;
+- receiving a request is never treated as proof of a local grant.
+
+The reference client hashes each granted definition. Changing a tool mapping, risk, or delegation under an existing ID invalidates that part of the grant. See [`PERMISSIONS.md`](./PERMISSIONS.md).
+
+### 4.5 Heartbeats
 
 Either peer may send:
 
@@ -603,6 +648,7 @@ Recommended stable error codes:
 | --- | --- | --- |
 | `invalid_message` | No | Envelope or JSON is invalid. |
 | `unsupported_version` | No | No compatible protocol version. |
+| `upgrade_required` | No | Client does not advertise the required permission capability. |
 | `hello_required` | No | First client action was not `client.hello`. |
 | `invalid_hello` | No | Hello action data is invalid. |
 | `unauthorized` | No | Credential is missing/invalid or scope is insufficient. |
@@ -669,13 +715,14 @@ A practical build order is:
 2. separate client and publisher authentication;
 3. authenticated WebSocket with hello/welcome;
 4. durable session binding;
-5. transactional HTTP event publication and idempotency;
-6. online `event.deliver`;
-7. offline pending queue;
-8. ACK validation and terminal states;
-9. retry leases, deadlines, backoff, and expiry;
-10. heartbeat and stale-connection cleanup;
-11. metrics, audit logs, limits, rotation, and horizontal scaling.
+5. mandatory permission request after binding;
+6. transactional HTTP event publication and idempotency;
+7. online `event.deliver`;
+8. offline pending queue;
+9. ACK validation and terminal states;
+10. retry leases, deadlines, backoff, and expiry;
+11. heartbeat and stale-connection cleanup;
+12. metrics, audit logs, limits, rotation, and horizontal scaling.
 
 The repository's [`example/backend`](../example/backend) demonstrates one provider-owned AWP endpoint using FastAPI and in-memory state. It is intentionally not a central relay and not a production template for persistence or scaling.
 
@@ -687,7 +734,10 @@ Before calling a backend AWP `0.1` compatible, test at least:
 - non-`client.hello` first messages are rejected;
 - unsupported versions are rejected;
 - hello receives welcome with matching `device_id`;
+- clients without `capabilities.permissions=true` receive `upgrade_required`;
 - same-device reconnect replaces or safely supersedes the old socket;
+- every bound session receives `permission.request` before any delivery;
+- permission requests include valid `runtime.wake` and are resent after reconnect;
 - session binding is idempotent for the same owner;
 - cross-device and cross-tenant session rebinding fails;
 - publisher cannot target resources outside its scope;
@@ -717,7 +767,7 @@ AWP `0.1` does not yet standardize:
 - subscription/filter expressions;
 - event batching or wake coalescing;
 - multi-device fan-out;
-- manual approval policies;
+- interactive approval transport for actions marked `interactive-only`;
 - publisher request signatures;
 - cursor-based delivery replay;
 - retention defaults;

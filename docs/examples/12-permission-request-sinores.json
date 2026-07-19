@@ -1,0 +1,42 @@
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_permission_01",
+  "action": "permission.request",
+  "timestamp": "2026-07-19T15:00:00Z",
+  "data": {
+    "request_id": "req_sinores_01",
+    "session_id": "ses_01JABC123",
+    "permissions": [
+      {
+        "id": "runtime.wake",
+        "title": "Wake this Codex session",
+        "risk": "runtime",
+        "delegation": "background",
+        "mcp_tools": []
+      },
+      {
+        "id": "messages.read_new",
+        "title": "Read new WhatsApp messages",
+        "description": "Read messages received after this session was bound",
+        "risk": "read",
+        "delegation": "background",
+        "mcp_tools": ["get_new_messages"]
+      },
+      {
+        "id": "messages.read_history",
+        "title": "Read conversation history",
+        "risk": "read",
+        "delegation": "background",
+        "mcp_tools": ["list_messages"]
+      },
+      {
+        "id": "messages.send",
+        "title": "Send WhatsApp replies automatically",
+        "risk": "write",
+        "delegation": "background",
+        "mcp_tools": ["send_message"]
+      }
+    ]
+  }
+}

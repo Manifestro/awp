@@ -15,16 +15,17 @@ const (
 )
 
 const (
-	ActionClientHello   = "client.hello"
-	ActionServerWelcome = "server.welcome"
-	ActionSessionBind   = "session.bind"
-	ActionSessionBound  = "session.bound"
-	ActionEventPublish  = "event.publish"
-	ActionEventDeliver  = "event.deliver"
-	ActionEventAck      = "event.ack"
-	ActionHeartbeatPing = "heartbeat.ping"
-	ActionHeartbeatPong = "heartbeat.pong"
-	ActionError         = "error"
+	ActionClientHello       = "client.hello"
+	ActionServerWelcome     = "server.welcome"
+	ActionSessionBind       = "session.bind"
+	ActionSessionBound      = "session.bound"
+	ActionPermissionRequest = "permission.request"
+	ActionEventPublish      = "event.publish"
+	ActionEventDeliver      = "event.deliver"
+	ActionEventAck          = "event.ack"
+	ActionHeartbeatPing     = "heartbeat.ping"
+	ActionHeartbeatPong     = "heartbeat.pong"
+	ActionError             = "error"
 )
 
 type Message struct {
@@ -48,8 +49,9 @@ type ClientInfo struct {
 }
 
 type Capabilities struct {
-	Adapters []string `json:"adapters"`
-	Resume   bool     `json:"resume"`
+	Adapters    []string `json:"adapters"`
+	Resume      bool     `json:"resume"`
+	Permissions bool     `json:"permissions"`
 }
 
 type ServerWelcomeData struct {
@@ -63,6 +65,21 @@ type SessionBindData struct {
 	SessionID string         `json:"session_id"`
 	Adapter   string         `json:"adapter"`
 	Metadata  map[string]any `json:"metadata"`
+}
+
+type PermissionRequestData struct {
+	RequestID   string                  `json:"request_id"`
+	SessionID   string                  `json:"session_id"`
+	Permissions []PermissionRequestItem `json:"permissions"`
+}
+
+type PermissionRequestItem struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description,omitempty"`
+	Risk        string   `json:"risk"`
+	Delegation  string   `json:"delegation"`
+	MCPTools    []string `json:"mcp_tools,omitempty"`
 }
 
 type DeliveryData struct {

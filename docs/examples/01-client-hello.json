@@ -15,7 +15,8 @@
         "codex",
         "claude-code"
       ],
-      "resume": true
+      "resume": true,
+      "permissions": true
     }
   }
 }

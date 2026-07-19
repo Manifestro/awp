@@ -6,12 +6,13 @@ import (
 	"io"
 
 	"github.com/Manifestro/awp/internal/adapters/codex"
+	"github.com/Manifestro/awp/internal/permissions"
 	"github.com/Manifestro/awp/internal/protocol"
 	"github.com/Manifestro/awp/internal/sessions"
 )
 
 type Adapter interface {
-	Run(context.Context, sessions.Binding, protocol.DeliveryData) error
+	Run(context.Context, sessions.Binding, protocol.DeliveryData, permissions.Authorization, string) error
 }
 
 func Resolve(binding sessions.Binding, output io.Writer) (Adapter, error) {

@@ -17,17 +17,18 @@ import (
 const maxMessageBytes = 64 * 1024
 
 type Options struct {
-	ServiceURL string
-	DeviceID   string
-	Token      string
-	Version    string
-	SessionID  string
-	Adapter    string
-	Sessions   []SessionRegistration
-	Once       bool
-	Concurrent bool
-	Receive    func(protocol.Message) error
-	Handle     func(context.Context, protocol.DeliveryData) error
+	ServiceURL                 string
+	DeviceID                   string
+	Token                      string
+	Version                    string
+	SessionID                  string
+	Adapter                    string
+	Sessions                   []SessionRegistration
+	Once                       bool
+	Concurrent                 bool
+	StopAfterPermissionRequest bool
+	Receive                    func(protocol.Message) error
+	Handle                     func(context.Context, protocol.DeliveryData) error
 }
 
 type SessionRegistration struct {
@@ -65,8 +66,9 @@ func Run(ctx context.Context, options Options) error {
 			Version: options.Version,
 		},
 		Capabilities: protocol.Capabilities{
-			Adapters: installedAdapters(),
-			Resume:   options.Handle != nil,
+			Adapters:    installedAdapters(),
+			Resume:      options.Handle != nil || options.StopAfterPermissionRequest,
+			Permissions: true,
 		},
 	})
 	if err != nil {
@@ -143,9 +145,12 @@ func Run(ctx context.Context, options Options) error {
 			if err := pong(runContext, connection, message.ID); err != nil {
 				return err
 			}
-		case protocol.ActionSessionBound, protocol.ActionError:
+		case protocol.ActionSessionBound, protocol.ActionPermissionRequest, protocol.ActionError:
 			if err := receive(options.Receive, message); err != nil {
 				return err
+			}
+			if message.Action == protocol.ActionPermissionRequest && options.StopAfterPermissionRequest {
+				return nil
 			}
 		default:
 			return fmt.Errorf("unexpected server action %q", message.Action)

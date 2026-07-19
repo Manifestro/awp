@@ -59,6 +59,7 @@ class ClientInfo(BaseModel):
 class Capabilities(BaseModel):
     adapters: list[str] = Field(default_factory=list)
     resume: bool = False
+    permissions: bool = False
 
 
 class ClientHelloData(BaseModel):
@@ -245,10 +246,14 @@ class AWPState:
             await self.disconnect(device_id, websocket)
             return False
 
-    async def deliver_pending(self, device_id: str) -> None:
+    async def deliver_pending(self, device_id: str, session_id: str) -> None:
         async with self.lock:
             delivery_ids = list(self.pending.get(device_id, []))
-            messages = [self.deliveries[item].message for item in delivery_ids if item in self.deliveries]
+            messages = [
+                self.deliveries[item].message
+                for item in delivery_ids
+                if item in self.deliveries and self.deliveries[item].session_id == session_id
+            ]
         for message in messages:
             if not await self.send(device_id, message):
                 return
@@ -320,6 +325,16 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             await websocket.close(code=1002)
             return
 
+        if not hello_data.capabilities.permissions:
+            await send_error(
+                websocket,
+                code="upgrade_required",
+                message="This provider requires an AWP client with permission grants",
+                reply_to=hello.id,
+            )
+            await websocket.close(code=1008, reason="AWP permission capability required")
+            return
+
         device_id = hello_data.device_id
         previous = await state.connect(device_id, websocket)
         if previous and previous is not websocket:
@@ -336,8 +351,6 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 },
             )
         )
-        await state.deliver_pending(device_id)
-
         while True:
             try:
                 message = Envelope.model_validate(await websocket.receive_json())
@@ -354,6 +367,46 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                             {"session_id": binding.session_id, "status": "active"},
                         )
                     )
+                    await websocket.send_json(
+                        envelope(
+                            "permission.request",
+                            {
+                                "request_id": f"req_{binding.session_id}",
+                                "session_id": binding.session_id,
+                                "permissions": [
+                                    {
+                                        "id": "runtime.wake",
+                                        "title": "Wake this agent session",
+                                        "risk": "runtime",
+                                        "delegation": "background",
+                                        "mcp_tools": [],
+                                    },
+                                    {
+                                        "id": "messages.read_new",
+                                        "title": "Read new messages",
+                                        "risk": "read",
+                                        "delegation": "background",
+                                        "mcp_tools": ["get_new_messages"],
+                                    },
+                                    {
+                                        "id": "messages.read_history",
+                                        "title": "Read conversation history",
+                                        "risk": "read",
+                                        "delegation": "background",
+                                        "mcp_tools": ["list_messages"],
+                                    },
+                                    {
+                                        "id": "messages.send",
+                                        "title": "Send messages automatically",
+                                        "risk": "write",
+                                        "delegation": "background",
+                                        "mcp_tools": ["send_message"],
+                                    },
+                                ],
+                            },
+                        )
+                    )
+                    await state.deliver_pending(device_id, binding.session_id)
                 elif message.action == "event.ack":
                     await state.acknowledge(device_id, EventAckData.model_validate(message.data))
                 elif message.action == "heartbeat.ping":

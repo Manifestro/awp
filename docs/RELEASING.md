@@ -5,18 +5,18 @@
 The release workflow runs for tags beginning with `v`:
 
 ```bash
-git tag v0.1.0-alpha.1
-git push origin v0.1.0-alpha.1
+git tag v0.2.0-alpha.1
+git push origin v0.2.0-alpha.1
 ```
 
 GitHub Actions builds these archives:
 
 ```text
-awp_0.1.0-alpha.1_darwin_amd64.tar.gz
-awp_0.1.0-alpha.1_darwin_arm64.tar.gz
-awp_0.1.0-alpha.1_linux_amd64.tar.gz
-awp_0.1.0-alpha.1_linux_arm64.tar.gz
-awp_0.1.0-alpha.1_checksums.txt
+awp_0.2.0-alpha.1_darwin_amd64.tar.gz
+awp_0.2.0-alpha.1_darwin_arm64.tar.gz
+awp_0.2.0-alpha.1_linux_amd64.tar.gz
+awp_0.2.0-alpha.1_linux_arm64.tar.gz
+awp_0.2.0-alpha.1_checksums.txt
 ```
 
 The installer resolves `/releases/latest`, downloads the matching archive, and verifies it against the checksum file.

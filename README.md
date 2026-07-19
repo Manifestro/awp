@@ -66,7 +66,7 @@ To install a specific version or use another destination:
 
 ```bash
 curl -LsSf https://awp.manifestro.io/install.sh | \
-  AWP_VERSION=0.1.0-alpha.1 AWP_INSTALL_DIR="$HOME/bin" sh
+  AWP_VERSION=0.2.0-alpha.1 AWP_INSTALL_DIR="$HOME/bin" sh
 ```
 
 ## Quick start with Codex
@@ -88,7 +88,8 @@ awp config set \
   --provider sinores \
   --service-url wss://sinores.net/awp \
   --device-id dev_my_macbook \
-  --token-env SINORES_TOKEN
+  --token-env SINORES_TOKEN \
+  --mcp-server sinores
 ```
 
 ### 2. Bind an agent session
@@ -107,17 +108,40 @@ awp sessions bind \
 
 `metadata-json` is defined by the provider. Sinores might use a channel ID; another provider can use a repository, mailbox, job, or subscription ID.
 
-### 3. Validate and run
+### 3. Review provider permissions
+
+The provider must request permission before AWP can wake the session. Fetch the signed-in provider's request and grant only what this binding needs:
+
+```bash
+awp permissions request \
+  --provider sinores \
+  --session-id ses_support
+
+awp permissions grant \
+  --provider sinores \
+  --session-id ses_support \
+  --allow runtime.wake,messages.read_new,messages.read_history \
+  --scope binding
+```
+
+AWP stores the grant locally and never edits `~/.codex/config.toml`. On every wake, the Codex adapter creates a one-run MCP tool allowlist. Ungranted tools remain unavailable to that background invocation.
+
+### 4. Validate and run
 
 ```bash
 awp doctor
 awp daemon
 ```
 
-When the provider sends an event for `ses_support`, AWP runs the equivalent of:
+When the provider sends an event for `ses_support`, AWP runs an isolated command equivalent to:
 
 ```bash
-codex exec resume --json <codex-session-id> -
+codex exec resume \
+  --json \
+  -c 'mcp_servers.sinores.enabled_tools=["get_new_messages","list_messages"]' \
+  -c 'mcp_servers.sinores.tools."get_new_messages".approval_mode="approve"' \
+  -c 'mcp_servers.sinores.tools."list_messages".approval_mode="approve"' \
+  <codex-session-id> -
 ```
 
 The event becomes the new message for that Codex session. After execution, the client acknowledges the delivery as completed or failed.
@@ -146,6 +170,25 @@ awp autostart disable
 ```
 
 Provider tokens used by `launchd` are copied into separate protected token files. They are not embedded in the plist. Linux service management is not implemented yet; run `awp daemon` with your preferred process supervisor.
+
+## Updates
+
+Check or install the latest verified GitHub release:
+
+```bash
+awp update check
+awp update install
+```
+
+Automatic updates are opt-in and disabled by default:
+
+```bash
+awp update auto enable --interval-hours 24
+awp update auto status
+awp update auto disable
+```
+
+When enabled, the daemon checks at startup whenever the configured interval has elapsed. The updater verifies the release SHA-256 checksum and atomically replaces the current executable. A running daemon continues using its current in-memory version until restarted.
 
 ## Multiple providers and sessions
 
@@ -225,6 +268,7 @@ go build -o ./bin/awp ./cmd/awp
 | Document | Contents |
 | --- | --- |
 | [Provider quickstart](./docs/PROVIDER_QUICKSTART.md) | Website-ready guide for adding AWP to an existing backend |
+| [Permission model](./docs/PERMISSIONS.md) | Provider requests, local grants, scopes, audit, and one-run runtime isolation |
 | [Protocol specification](./docs/PROTOCOL.md) | AWP `0.1` envelope, handshake, binding, delivery, ACKs, errors, and heartbeat |
 | [Backend implementation guide](./docs/HOW_TO_CREATE_AWP_BACKEND.md) | Authentication, persistence, routing, retry, security, and production requirements |
 | [JSON examples](./docs/examples) | Complete protocol messages for client and provider implementations |
@@ -236,7 +280,7 @@ go build -o ./bin/awp ./cmd/awp
 
 - Runtime session IDs remain on the local device and are never sent to providers.
 - The client only makes outbound provider connections.
-- An event resumes a session with its existing permissions; it grants no new permissions.
+- A provider event grants nothing by itself; only an explicit local AWP grant can authorize wake or provider MCP tools.
 - Event payloads are untrusted input and must not be treated as authorization.
 - Providers must authorize every device, session, subscription, and delivery independently.
 - At-least-once delivery requires idempotent processing and deduplication.
@@ -250,6 +294,8 @@ See the [backend security requirements](./docs/HOW_TO_CREATE_AWP_BACKEND.md#13-s
 - [x] Codex CLI runtime adapter
 - [x] Reconnect, backoff, acknowledgements, and macOS autostart
 - [x] Runnable FastAPI provider example
+- [x] Provider-requested permissions with local grants and per-wake Codex isolation
+- [x] Verified update checks, self-update, and opt-in automatic updates
 - [ ] Standard MCP-to-AWP subscription and pairing flow
 - [ ] Token issuance and rotation conventions
 - [ ] JSON Schemas and conformance test suite

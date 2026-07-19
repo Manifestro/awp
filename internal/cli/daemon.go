@@ -16,6 +16,7 @@ import (
 	"github.com/Manifestro/awp/internal/adapters"
 	"github.com/Manifestro/awp/internal/client"
 	"github.com/Manifestro/awp/internal/config"
+	"github.com/Manifestro/awp/internal/permissions"
 	"github.com/Manifestro/awp/internal/protocol"
 	"github.com/Manifestro/awp/internal/sessions"
 )
@@ -26,6 +27,8 @@ func runDaemon(args []string, stdout, stderr io.Writer) int {
 	configPath := flags.String("config", "", "config file path")
 	storePath := flags.String("store", "", "session registry file path")
 	tokenDirectory := flags.String("token-dir", "", "read provider tokens from protected <provider>.token files")
+	permissionPathFlag := flags.String("permissions-store", "", "permission state file path")
+	updatePolicyPath := flags.String("update-policy", "", "automatic update policy file path")
 	jsonOutput := flags.Bool("json", false, "print received messages as JSON Lines")
 	once := flags.Bool("once", false, "exit each provider connection after one delivered event")
 	timeout := flags.Duration("timeout", 0, "optional daemon timeout")
@@ -34,6 +37,7 @@ func runDaemon(args []string, stdout, stderr io.Writer) int {
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
+	runAutomaticUpdate(Version, *configPath, *updatePolicyPath, stderr)
 
 	resolvedConfig, err := config.Path(*configPath)
 	if err != nil {
@@ -58,6 +62,15 @@ func runDaemon(args []string, stdout, stderr io.Writer) int {
 	if len(bindings) == 0 {
 		return commandError("daemon", "sessions_empty", errors.New("no local AWP sessions are bound"), *jsonOutput, stdout, stderr)
 	}
+	permissionPath, err := permissions.Path(resolvedConfig, *permissionPathFlag)
+	if err != nil {
+		return commandError("daemon", "permissions_path", err, *jsonOutput, stdout, stderr)
+	}
+	permissionState, err := permissions.Load(permissionPath)
+	if err != nil {
+		return commandError("daemon", "permissions_read", err, *jsonOutput, stdout, stderr)
+	}
+	var permissionLock sync.Mutex
 	for _, binding := range bindings {
 		if _, found := cfg.Providers[binding.Provider]; !found {
 			return commandError("daemon", "provider_not_found", fmt.Errorf("session %s references unconfigured provider %q", binding.SessionID, binding.Provider), *jsonOutput, stdout, stderr)
@@ -105,6 +118,25 @@ func runDaemon(args []string, stdout, stderr io.Writer) int {
 		}
 		name := providerName
 		receive := func(message protocol.Message) error {
+			if message.Action == protocol.ActionPermissionRequest {
+				data, decodeErr := protocol.DecodeData[protocol.PermissionRequestData](message)
+				if decodeErr != nil {
+					return decodeErr
+				}
+				if _, found := handlers[data.SessionID]; !found {
+					return fmt.Errorf("provider %s requested permissions for unbound session %q", name, data.SessionID)
+				}
+				request := permissionRequestFromProtocol(name, data)
+				permissionLock.Lock()
+				_, recordErr := permissions.RecordRequest(&permissionState, request)
+				if recordErr == nil {
+					recordErr = permissions.Save(permissionPath, permissionState)
+				}
+				permissionLock.Unlock()
+				if recordErr != nil {
+					return fmt.Errorf("store provider permission request: %w", recordErr)
+				}
+			}
 			outputLock.Lock()
 			defer outputLock.Unlock()
 			if *jsonOutput {
@@ -125,7 +157,20 @@ func runDaemon(args []string, stdout, stderr io.Writer) int {
 			lock := locks[target.SessionID]
 			lock.Lock()
 			defer lock.Unlock()
-			return handler.adapter.Run(ctx, handler.binding, delivery)
+			permissionLock.Lock()
+			authorization, authorizationErr := permissions.Authorize(&permissionState, name, target.SessionID, true)
+			if authorizationErr == nil {
+				authorizationErr = permissions.Save(permissionPath, permissionState)
+			}
+			permissionLock.Unlock()
+			if authorizationErr != nil {
+				return authorizationErr
+			}
+			mcpServer := provider.MCPServer
+			if mcpServer == "" {
+				mcpServer = name
+			}
+			return handler.adapter.Run(ctx, handler.binding, delivery, authorization, mcpServer)
 		}
 		providerOptions[providerName] = client.Options{
 			ServiceURL: provider.ServiceURL, DeviceID: cfg.DeviceID, Token: token, Version: Version,

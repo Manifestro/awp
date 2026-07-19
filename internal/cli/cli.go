@@ -10,11 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Manifestro/awp/internal/adapters"
 	"github.com/Manifestro/awp/internal/client"
 	"github.com/Manifestro/awp/internal/config"
+	"github.com/Manifestro/awp/internal/permissions"
 	"github.com/Manifestro/awp/internal/protocol"
 	"github.com/Manifestro/awp/internal/sessions"
 )
@@ -59,6 +61,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runConnect(args[1:], stdout, stderr)
 	case "sessions":
 		return runSessions(args[1:], stdout, stderr)
+	case "permissions":
+		return runPermissions(args[1:], stdout, stderr)
+	case "update":
+		return runUpdate(args[1:], stdout, stderr)
 	case "autostart":
 		return runAutostart(args[1:], stdout, stderr)
 	case "daemon":
@@ -80,6 +86,7 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	timeout := flags.Duration("timeout", 0, "optional connection timeout, for example 30s")
 	sessionID := flags.String("session-id", "", "AWP session binding to register after connecting")
 	storePath := flags.String("store", "", "session registry file path")
+	permissionPathFlag := flags.String("permissions-store", "", "permission state file path")
 	tokenFile := flags.String("token-file", "", "read bearer token from a protected file")
 	reconnect := flags.Bool("reconnect", false, "reconnect forever with exponential backoff")
 	reconnectInitial := flags.Duration("reconnect-initial", time.Second, "initial reconnect delay")
@@ -118,7 +125,38 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		defer cancel()
 	}
 
+	permissionPath := ""
+	permissionState := permissions.NewStore()
+	var permissionLock sync.Mutex
+	if *sessionID != "" {
+		permissionPath, err = permissions.Path(path, *permissionPathFlag)
+		if err != nil {
+			return commandError("connect", "permissions_path", err, *jsonOutput, stdout, stderr)
+		}
+		permissionState, err = permissions.Load(permissionPath)
+		if err != nil {
+			return commandError("connect", "permissions_read", err, *jsonOutput, stdout, stderr)
+		}
+	}
 	receive := func(message protocol.Message) error {
+		if message.Action == protocol.ActionPermissionRequest && *sessionID != "" {
+			data, decodeErr := protocol.DecodeData[protocol.PermissionRequestData](message)
+			if decodeErr != nil {
+				return decodeErr
+			}
+			if data.SessionID != *sessionID {
+				return fmt.Errorf("provider requested permissions for unexpected session %q", data.SessionID)
+			}
+			permissionLock.Lock()
+			_, recordErr := permissions.RecordRequest(&permissionState, permissionRequestFromProtocol(*providerName, data))
+			if recordErr == nil {
+				recordErr = permissions.Save(permissionPath, permissionState)
+			}
+			permissionLock.Unlock()
+			if recordErr != nil {
+				return recordErr
+			}
+		}
 		if *jsonOutput {
 			return json.NewEncoder(stdout).Encode(message)
 		}
@@ -148,7 +186,20 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		adapterName = binding.Adapter
 		clientSessions = []client.SessionRegistration{{SessionID: binding.SessionID, Adapter: binding.Adapter, Metadata: binding.Metadata}}
 		handle = func(ctx context.Context, delivery protocol.DeliveryData) error {
-			return resolved.Run(ctx, binding, delivery)
+			permissionLock.Lock()
+			authorization, authorizationErr := permissions.Authorize(&permissionState, *providerName, *sessionID, true)
+			if authorizationErr == nil {
+				authorizationErr = permissions.Save(permissionPath, permissionState)
+			}
+			permissionLock.Unlock()
+			if authorizationErr != nil {
+				return authorizationErr
+			}
+			mcpServer := provider.MCPServer
+			if mcpServer == "" {
+				mcpServer = *providerName
+			}
+			return resolved.Run(ctx, binding, delivery, authorization, mcpServer)
 		}
 	}
 	clientOptions := client.Options{
@@ -220,6 +271,7 @@ func runConfigSet(args []string, stdout, stderr io.Writer) int {
 	providerName := flags.String("provider", "", "provider name, for example sinores")
 	deviceID := flags.String("device-id", "", "opaque AWP device identifier; required for the first provider")
 	tokenEnv := flags.String("token-env", "", "environment variable containing this provider's bearer token")
+	mcpServer := flags.String("mcp-server", "", "Codex MCP server name; defaults to provider name; use none when no MCP exists")
 	configPath := flags.String("config", "", "config file path")
 	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
 	if err := flags.Parse(args); err != nil {
@@ -239,7 +291,7 @@ func runConfigSet(args []string, stdout, stderr io.Writer) int {
 	if *deviceID != "" {
 		cfg.DeviceID = *deviceID
 	}
-	if err := config.SetProvider(&cfg, *providerName, config.Provider{ServiceURL: *serviceURL, TokenEnv: *tokenEnv}); err != nil {
+	if err := config.SetProvider(&cfg, *providerName, config.Provider{ServiceURL: *serviceURL, TokenEnv: *tokenEnv, MCPServer: *mcpServer}); err != nil {
 		return commandError("config.set", "invalid_provider", err, *jsonOutput, stdout, stderr)
 	}
 	if err := config.Save(path, cfg); err != nil {
@@ -277,7 +329,11 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "Config: %s\nDevice: %s\n", path, cfg.DeviceID)
 	for name, provider := range cfg.Providers {
-		fmt.Fprintf(stdout, "Provider: %s\n  Service: %s\n  Token environment: %s\n", name, provider.ServiceURL, provider.TokenEnv)
+		mcpServer := provider.MCPServer
+		if mcpServer == "" {
+			mcpServer = name
+		}
+		fmt.Fprintf(stdout, "Provider: %s\n  Service: %s\n  Token environment: %s\n  MCP server: %s\n", name, provider.ServiceURL, provider.TokenEnv, mcpServer)
 	}
 	return 0
 }
@@ -323,6 +379,8 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "config file path")
+	storePath := flags.String("store", "", "session registry file path")
+	permissionPathFlag := flags.String("permissions-store", "", "permission state file path")
 	jsonOutput := flags.Bool("json", false, "print machine-readable JSON")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -352,6 +410,41 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 			checks = append(checks, check{Name: "provider:" + name, OK: false, Message: provider.TokenEnv + " is not set"})
 		} else {
 			checks = append(checks, check{Name: "provider:" + name, OK: true, Message: provider.ServiceURL + " using " + provider.TokenEnv})
+		}
+	}
+	if pathErr == nil && cfg.Version != "" {
+		registryPath, registryPathErr := sessions.Path(path, *storePath)
+		permissionPath, permissionPathErr := permissions.Path(path, *permissionPathFlag)
+		if registryPathErr != nil || permissionPathErr != nil {
+			message := "resolve local state"
+			if registryPathErr != nil {
+				message = registryPathErr.Error()
+			} else if permissionPathErr != nil {
+				message = permissionPathErr.Error()
+			}
+			checks = append(checks, check{Name: "permissions", OK: false, Message: message})
+		} else {
+			registry, registryErr := sessions.Load(registryPath)
+			permissionState, permissionErr := permissions.Load(permissionPath)
+			if registryErr != nil || permissionErr != nil {
+				message := "read local state"
+				if registryErr != nil {
+					message = registryErr.Error()
+				} else if permissionErr != nil {
+					message = permissionErr.Error()
+				}
+				checks = append(checks, check{Name: "permissions", OK: false, Message: message})
+			} else {
+				for _, binding := range sessions.List(registry, "") {
+					_, grantErr := permissions.Authorize(&permissionState, binding.Provider, binding.SessionID, false)
+					checks = append(checks, check{Name: "permission:" + binding.Provider + "/" + binding.SessionID, OK: grantErr == nil, Message: func() string {
+						if grantErr != nil {
+							return grantErr.Error()
+						}
+						return "runtime.wake granted"
+					}()})
+				}
+			}
 		}
 	}
 
@@ -424,22 +517,34 @@ func printUsage(writer io.Writer) {
 
 Usage:
   awp version [--json]
-  awp config set --provider <name> --service-url <wss://.../awp> --token-env <ENV> [--device-id <id>] [--config <path>] [--json]
+  awp config set --provider <name> --service-url <wss://.../awp> --token-env <ENV> [--mcp-server <name>] [--device-id <id>] [--config <path>] [--json]
   awp config show [--config <path>] [--json]
   awp config remove --provider <name> [--config <path>] [--json]
-  awp doctor [--config <path>] [--json]
+  awp doctor [--config <path>] [--store <path>] [--permissions-store <path>] [--json]
   awp sessions bind --provider <name> --session-id <id> --adapter codex --runtime-session-id <id> [--workspace <path>] [--metadata-json <object>] [--json]
   awp sessions list [--provider <name>] [--json]
   awp sessions remove --provider <name> --session-id <id> [--json]
-  awp daemon [--config <path>] [--store <path>] [--token-dir <path>] [--once] [--timeout 30s] [--json]
+  awp permissions request --provider <name> --session-id <id> [--timeout 30s] [--json]
+  awp permissions pending [--provider <name>] [--json]
+  awp permissions grant --provider <name> --session-id <id> --allow <ids> [--scope once|binding|provider] [--json]
+  awp permissions list [--provider <name>] [--json]
+  awp permissions revoke --provider <name> --session-id <id> [--permissions <ids>] [--scope <scope>] [--json]
+  awp permissions audit [--json]
+  awp update check [--json]
+  awp update install [--json]
+  awp update auto enable [--interval-hours 24] [--json]
+  awp update auto disable [--json]
+  awp update auto status [--json]
+  awp daemon [--config <path>] [--store <path>] [--permissions-store <path>] [--token-dir <path>] [--once] [--timeout 30s] [--json]
   awp autostart enable [--start-now] [--json]
   awp autostart status [--json]
   awp autostart disable [--json]
-  awp connect --provider <name> [--config <path>] [--session-id <id>] [--store <path>] [--token-file <path>] [--reconnect] [--once] [--timeout 30s] [--json]
+  awp connect --provider <name> [--config <path>] [--session-id <id>] [--store <path>] [--permissions-store <path>] [--token-file <path>] [--reconnect] [--once] [--timeout 30s] [--json]
 
 Environment:
   AWP_CONFIG  Override the default configuration path.
   AWP_SESSIONS Override the default session registry path.
+  AWP_PERMISSIONS Override the default permission state path.
   Provider token environment variables are configured per provider.
 `)+"\n")
 }

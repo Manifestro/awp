@@ -22,6 +22,7 @@ type Config struct {
 type Provider struct {
 	ServiceURL string `json:"service_url"`
 	TokenEnv   string `json:"token_env"`
+	MCPServer  string `json:"mcp_server,omitempty"`
 }
 
 func Default() Config {
@@ -141,6 +142,16 @@ func ValidateProvider(name string, provider Provider) error {
 	if strings.ContainsAny(provider.TokenEnv, "= \t\r\n") {
 		return fmt.Errorf("provider %q token_env must be an environment variable name", name)
 	}
+	if provider.MCPServer != "" && strings.ContainsAny(provider.MCPServer, "\r\n") {
+		return fmt.Errorf("provider %q mcp_server contains invalid characters", name)
+	}
+	mcpServer := provider.MCPServer
+	if mcpServer == "" {
+		mcpServer = name
+	}
+	if mcpServer != "none" && !isBareTOMLKey(mcpServer) {
+		return fmt.Errorf("provider %q mcp_server must contain only letters, digits, underscores, or hyphens", name)
+	}
 	parsed, err := url.Parse(provider.ServiceURL)
 	if err != nil || parsed.Host == "" {
 		return fmt.Errorf("provider %q service_url must be an absolute WebSocket URL", name)
@@ -152,6 +163,19 @@ func ValidateProvider(name string, provider Provider) error {
 		return fmt.Errorf("provider %q insecure ws is allowed only for localhost", name)
 	}
 	return nil
+}
+
+func isBareTOMLKey(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func SetProvider(cfg *Config, name string, provider Provider) error {

@@ -9,6 +9,7 @@ The example implements:
 - authenticated WebSocket connections at `/awp`;
 - `client.hello` and `server.welcome`;
 - `session.bind` and `session.bound`;
+- mandatory `permission.request` before delivery;
 - authenticated `event.publish` at `POST /events`;
 - `event.deliver` routing by `device_id` and `session_id`;
 - in-memory offline delivery queues;
@@ -39,6 +40,7 @@ awp config set \
   --service-url ws://localhost:8000/awp \
   --device-id dev_macbook_01 \
   --token-env AWP_TOKEN \
+  --mcp-server none \
   --config /tmp/awp-example.json \
   --json
 ```
@@ -54,6 +56,22 @@ awp sessions bind \
   --runtime-session-id 019f79c6-0c42-76a3-8812-8ec8b77d3e66 \
   --workspace /path/to/project \
   --json
+```
+
+Fetch the provider request and grant only permission to wake. The example advertises illustrative message tools, but it does not implement an MCP server:
+
+```bash
+awp permissions request \
+  --config /tmp/awp-example.json \
+  --provider example \
+  --session-id ses_01JABC123
+
+awp permissions grant \
+  --config /tmp/awp-example.json \
+  --provider example \
+  --session-id ses_01JABC123 \
+  --allow runtime.wake \
+  --scope binding
 ```
 
 Start the daemon. It registers every locally bound AWP session over one device connection:

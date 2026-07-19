@@ -49,3 +49,10 @@ func TestValidateAllowsLocalPlaintextWebSocket(t *testing.T) {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }
+
+func TestValidateRejectsUnsafeMCPServerPath(t *testing.T) {
+	cfg := Config{Version: Version, DeviceID: "dev_test", Providers: map[string]Provider{"example": {ServiceURL: "wss://example.com/awp", TokenEnv: "EXAMPLE_TOKEN", MCPServer: `bad.name`}}}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("Validate() accepted an MCP server name unsafe for Codex -c dotted paths")
+	}
+}

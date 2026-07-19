@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Manifestro/awp/internal/permissions"
 	"github.com/Manifestro/awp/internal/protocol"
 	"github.com/Manifestro/awp/internal/sessions"
 )
@@ -43,10 +44,11 @@ func TestAdapterResumesCodexWithUniversalEventPrompt(t *testing.T) {
 		Event:      json.RawMessage(`{"source":"monitoring","name":"alert.created","data":{"service":"api"}}`),
 	}
 
-	if err := adapter.Run(context.Background(), binding, delivery); err != nil {
+	authorization := permissions.Authorization{Permissions: []string{permissions.RuntimeWake, "messages.read_new"}, MCPTools: []string{"get_new_messages"}}
+	if err := adapter.Run(context.Background(), binding, delivery, authorization, "sinores"); err != nil {
 		t.Fatal(err)
 	}
-	wantArgs := []string{"exec", "resume", "--json", "runtime_test", "-"}
+	wantArgs := []string{"exec", "resume", "--json", "-c", `mcp_servers.sinores.enabled_tools=["get_new_messages"]`, "-c", `mcp_servers.sinores.tools."get_new_messages".approval_mode="approve"`, "runtime_test", "-"}
 	if strings.Join(runner.args, " ") != strings.Join(wantArgs, " ") {
 		t.Fatalf("args = %#v, want %#v", runner.args, wantArgs)
 	}
