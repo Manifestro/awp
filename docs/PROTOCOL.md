@@ -118,6 +118,8 @@ The client sends `session.bind` to announce an opaque AWP session binding. The m
 
 The service confirms the binding with `session.bound`. Bindings MAY expire and MAY need to be restored after client restart.
 
+A client MAY send multiple `session.bind` messages on the same device connection. A service MUST route each delivery by both `device_id` and `session_id`; it MUST NOT require a separate WebSocket connection per session. One connection per device avoids competing sockets when several agent sessions or event sources are active.
+
 ### 4. Event publication
 
 An Event Server sends `event.publish` to the AWP Service.

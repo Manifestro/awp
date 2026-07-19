@@ -61,6 +61,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runSessions(args[1:], stdout, stderr)
 	case "autostart":
 		return runAutostart(args[1:], stdout, stderr)
+	case "daemon":
+		return runDaemon(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 		printUsage(stderr)
@@ -368,9 +370,10 @@ Usage:
   awp sessions bind --session-id <id> --adapter codex --runtime-session-id <id> [--workspace <path>] [--json]
   awp sessions list [--json]
   awp sessions remove --session-id <id> [--json]
-  awp autostart enable --session-id <id> [--start-now] [--json]
-  awp autostart status --session-id <id> [--json]
-  awp autostart disable --session-id <id> [--json]
+  awp daemon [--config <path>] [--store <path>] [--token-file <path>] [--once] [--timeout 30s] [--json]
+  awp autostart enable [--start-now] [--json]
+  awp autostart status [--json]
+  awp autostart disable [--json]
   awp connect [--config <path>] [--session-id <id>] [--store <path>] [--token-file <path>] [--reconnect] [--once] [--timeout 30s] [--json]
 
 Environment:

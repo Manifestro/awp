@@ -5,50 +5,41 @@ import (
 	"encoding/xml"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"text/template"
 )
 
-const labelPrefix = "net.manifestro.awp"
-
-var safeID = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+const daemonLabel = "net.manifestro.awp"
 
 type LaunchdOptions struct {
 	BinaryPath string
 	ConfigPath string
 	StorePath  string
 	TokenFile  string
-	SessionID  string
 	LogPath    string
 	PathEnv    string
 }
 
-func Label(sessionID string) string {
-	clean := safeID.ReplaceAllString(sessionID, "-")
-	if clean == "" {
-		clean = "client"
-	}
-	return labelPrefix + "." + clean
+func Label() string {
+	return daemonLabel
 }
 
-func Filename(directory, sessionID string) string {
-	return filepath.Join(directory, Label(sessionID)+".plist")
+func Filename(directory string) string {
+	return filepath.Join(directory, Label()+".plist")
 }
 
 func RenderLaunchd(options LaunchdOptions) ([]byte, error) {
-	if options.BinaryPath == "" || options.ConfigPath == "" || options.StorePath == "" || options.TokenFile == "" || options.SessionID == "" {
-		return nil, fmt.Errorf("binary, config, store, token file, and session id are required")
+	if options.BinaryPath == "" || options.ConfigPath == "" || options.StorePath == "" || options.TokenFile == "" {
+		return nil, fmt.Errorf("binary, config, store, and token file are required")
 	}
 	if options.LogPath == "" {
 		return nil, fmt.Errorf("log path is required")
 	}
 	values := map[string]string{
-		"Label":     escape(Label(options.SessionID)),
+		"Label":     escape(Label()),
 		"Binary":    escape(options.BinaryPath),
 		"Config":    escape(options.ConfigPath),
 		"Store":     escape(options.StorePath),
 		"TokenFile": escape(options.TokenFile),
-		"Session":   escape(options.SessionID),
 		"Log":       escape(options.LogPath),
 		"PathEnv":   escape(options.PathEnv),
 	}
@@ -74,16 +65,13 @@ var launchdTemplate = template.Must(template.New("launchd").Parse(`<?xml version
   <key>ProgramArguments</key>
   <array>
     <string>{{.Binary}}</string>
-    <string>connect</string>
+    <string>daemon</string>
     <string>--config</string>
     <string>{{.Config}}</string>
     <string>--store</string>
     <string>{{.Store}}</string>
     <string>--token-file</string>
     <string>{{.TokenFile}}</string>
-    <string>--session-id</string>
-    <string>{{.Session}}</string>
-    <string>--reconnect</string>
     <string>--json</string>
   </array>
   <key>RunAtLoad</key>

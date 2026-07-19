@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"sync"
 
 	"github.com/Manifestro/awp/internal/config"
 	"github.com/Manifestro/awp/internal/protocol"
@@ -17,14 +18,22 @@ import (
 const maxMessageBytes = 64 * 1024
 
 type Options struct {
-	Config    config.Config
-	Token     string
-	Version   string
+	Config     config.Config
+	Token      string
+	Version    string
+	SessionID  string
+	Adapter    string
+	Sessions   []SessionRegistration
+	Once       bool
+	Concurrent bool
+	Receive    func(protocol.Message) error
+	Handle     func(context.Context, protocol.DeliveryData) error
+}
+
+type SessionRegistration struct {
 	SessionID string
 	Adapter   string
-	Once      bool
-	Receive   func(protocol.Message) error
-	Handle    func(context.Context, protocol.DeliveryData) error
+	Metadata  map[string]any
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -40,7 +49,13 @@ func Run(ctx context.Context, options Options) error {
 		}
 		return fmt.Errorf("connect to AWP Service: %w", err)
 	}
-	defer connection.Close(websocket.StatusNormalClosure, "client stopped")
+	runContext, cancel := context.WithCancel(ctx)
+	var processing sync.WaitGroup
+	defer func() {
+		cancel()
+		_ = connection.Close(websocket.StatusNormalClosure, "client stopped")
+		processing.Wait()
+	}()
 	connection.SetReadLimit(maxMessageBytes)
 
 	hello, err := protocol.New(protocol.ActionClientHello, protocol.ClientHelloData{
@@ -57,14 +72,14 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil {
 		return err
 	}
-	if err := wsjson.Write(ctx, connection, hello); err != nil {
+	if err := wsjson.Write(runContext, connection, hello); err != nil {
 		return fmt.Errorf("send client.hello: %w", err)
 	}
 
 	welcomeReceived := false
 	for {
 		var message protocol.Message
-		if err := wsjson.Read(ctx, connection, &message); err != nil {
+		if err := wsjson.Read(runContext, connection, &message); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return err
 			}
@@ -87,8 +102,8 @@ func Run(ctx context.Context, options Options) error {
 			if err := receive(options.Receive, message); err != nil {
 				return err
 			}
-			if options.SessionID != "" {
-				if err := bindSession(ctx, connection, options); err != nil {
+			for _, registration := range sessionRegistrations(options) {
+				if err := bindSession(runContext, connection, registration); err != nil {
 					return err
 				}
 			}
@@ -109,30 +124,23 @@ func Run(ctx context.Context, options Options) error {
 			if err := validateTarget(options, delivery); err != nil {
 				return err
 			}
-			if options.Handle == nil {
-				if err := acknowledge(ctx, connection, delivery, "accepted", nil); err != nil {
-					return err
-				}
-			} else {
-				handleErr := options.Handle(ctx, delivery)
-				status := "completed"
-				var result map[string]any
-				if handleErr != nil {
-					status = "failed"
-					result = map[string]any{"error": handleErr.Error()}
-				}
-				if err := acknowledge(ctx, connection, delivery, status, result); err != nil {
-					return err
-				}
-				if handleErr != nil {
-					return fmt.Errorf("handle AWP event %s: %w", delivery.EventID, handleErr)
-				}
+			process := func() error { return processDelivery(runContext, connection, options, delivery) }
+			if options.Concurrent && !options.Once {
+				processing.Add(1)
+				go func() {
+					defer processing.Done()
+					if processErr := process(); processErr != nil {
+						connection.CloseNow()
+					}
+				}()
+			} else if err := process(); err != nil {
+				return err
 			}
 			if options.Once {
 				return nil
 			}
 		case protocol.ActionHeartbeatPing:
-			if err := pong(ctx, connection, message.ID); err != nil {
+			if err := pong(runContext, connection, message.ID); err != nil {
 				return err
 			}
 		case protocol.ActionSessionBound, protocol.ActionError:
@@ -145,11 +153,29 @@ func Run(ctx context.Context, options Options) error {
 	}
 }
 
-func bindSession(ctx context.Context, connection *websocket.Conn, options Options) error {
+func processDelivery(ctx context.Context, connection *websocket.Conn, options Options, delivery protocol.DeliveryData) error {
+	if options.Handle == nil {
+		return acknowledge(ctx, connection, delivery, "accepted", nil)
+	}
+	handleErr := options.Handle(ctx, delivery)
+	status := "completed"
+	var result map[string]any
+	if handleErr != nil {
+		status = "failed"
+		result = map[string]any{"error": handleErr.Error()}
+	}
+	return acknowledge(ctx, connection, delivery, status, result)
+}
+
+func bindSession(ctx context.Context, connection *websocket.Conn, registration SessionRegistration) error {
+	metadata := registration.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
 	message, err := protocol.New(protocol.ActionSessionBind, protocol.SessionBindData{
-		SessionID: options.SessionID,
-		Adapter:   options.Adapter,
-		Metadata:  map[string]any{},
+		SessionID: registration.SessionID,
+		Adapter:   registration.Adapter,
+		Metadata:  metadata,
 	})
 	if err != nil {
 		return err
@@ -183,9 +209,6 @@ func acknowledge(
 }
 
 func validateTarget(options Options, delivery protocol.DeliveryData) error {
-	if options.SessionID == "" {
-		return nil
-	}
 	var target protocol.TargetData
 	if err := json.Unmarshal(delivery.Target, &target); err != nil {
 		return fmt.Errorf("decode event.deliver target: %w", err)
@@ -193,10 +216,26 @@ func validateTarget(options Options, delivery protocol.DeliveryData) error {
 	if target.DeviceID != options.Config.DeviceID {
 		return fmt.Errorf("delivery targets device %q, expected %q", target.DeviceID, options.Config.DeviceID)
 	}
-	if target.SessionID != options.SessionID {
-		return fmt.Errorf("delivery targets session %q, expected %q", target.SessionID, options.SessionID)
+	registrations := sessionRegistrations(options)
+	if len(registrations) == 0 {
+		return nil
 	}
-	return nil
+	for _, registration := range registrations {
+		if target.SessionID == registration.SessionID {
+			return nil
+		}
+	}
+	return fmt.Errorf("delivery targets unregistered session %q", target.SessionID)
+}
+
+func sessionRegistrations(options Options) []SessionRegistration {
+	if len(options.Sessions) > 0 {
+		return options.Sessions
+	}
+	if options.SessionID == "" {
+		return nil
+	}
+	return []SessionRegistration{{SessionID: options.SessionID, Adapter: options.Adapter, Metadata: map[string]any{}}}
 }
 
 func pong(ctx context.Context, connection *websocket.Conn, replyTo string) error {

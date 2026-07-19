@@ -23,7 +23,7 @@ func runAutostart(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if runtime.GOOS != "darwin" {
-		return commandError("autostart."+args[0], "unsupported_platform", fmt.Errorf("autostart currently supports macOS launchd; use awp connect --reconnect on %s", runtime.GOOS), hasJSON(args[1:]), stdout, stderr)
+		return commandError("autostart."+args[0], "unsupported_platform", fmt.Errorf("autostart currently supports macOS launchd; run awp daemon under a process supervisor on %s", runtime.GOOS), hasJSON(args[1:]), stdout, stderr)
 	}
 	switch args[0] {
 	case "enable":
@@ -39,7 +39,6 @@ func runAutostart(args []string, stdout, stderr io.Writer) int {
 }
 
 type autostartFlags struct {
-	sessionID  *string
 	configPath *string
 	storePath  *string
 	directory  *string
@@ -48,7 +47,6 @@ type autostartFlags struct {
 
 func addAutostartFlags(flags *flag.FlagSet) autostartFlags {
 	return autostartFlags{
-		sessionID:  flags.String("session-id", "", "AWP session to run in the background"),
 		configPath: flags.String("config", "", "config file path"),
 		storePath:  flags.String("store", "", "session registry file path"),
 		directory:  flags.String("directory", "", "launch agent directory (primarily for testing)"),
@@ -64,7 +62,7 @@ func runAutostartEnable(args []string, stdout, stderr io.Writer) int {
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	paths, cfg, err := resolveAutostart(*common.sessionID, *common.configPath, *common.storePath, *common.directory)
+	paths, cfg, err := resolveAutostart(*common.configPath, *common.storePath, *common.directory, true)
 	if err != nil {
 		return commandError("autostart.enable", "invalid_configuration", err, *common.jsonOutput, stdout, stderr)
 	}
@@ -77,7 +75,7 @@ func runAutostartEnable(args []string, stdout, stderr io.Writer) int {
 	}
 	manifest, err := autostart.RenderLaunchd(autostart.LaunchdOptions{
 		BinaryPath: paths.binary, ConfigPath: paths.config, StorePath: paths.store,
-		TokenFile: paths.token, SessionID: *common.sessionID, LogPath: paths.log, PathEnv: os.Getenv("PATH"),
+		TokenFile: paths.token, LogPath: paths.log, PathEnv: os.Getenv("PATH"),
 	})
 	if err != nil {
 		return commandError("autostart.enable", "manifest_render", err, *common.jsonOutput, stdout, stderr)
@@ -92,11 +90,11 @@ func runAutostartEnable(args []string, stdout, stderr io.Writer) int {
 			return commandError("autostart.enable", "launchctl_bootstrap", fmt.Errorf("%w: %s", loadErr, strings.TrimSpace(string(output))), *common.jsonOutput, stdout, stderr)
 		}
 	}
-	data := map[string]any{"enabled": true, "started": *startNow, "session_id": *common.sessionID, "manifest": paths.manifest, "token_file": paths.token}
+	data := map[string]any{"enabled": true, "started": *startNow, "manifest": paths.manifest, "token_file": paths.token}
 	if *common.jsonOutput {
 		return writeJSON(stdout, result{OK: true, Command: "autostart.enable", Data: data})
 	}
-	fmt.Fprintf(stdout, "Autostart enabled for %s. started=%t\n", *common.sessionID, *startNow)
+	fmt.Fprintf(stdout, "AWP daemon autostart enabled. started=%t\n", *startNow)
 	return 0
 }
 
@@ -107,7 +105,7 @@ func runAutostartStatus(args []string, stdout, stderr io.Writer) int {
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	paths, _, err := resolveAutostart(*common.sessionID, *common.configPath, *common.storePath, *common.directory)
+	paths, _, err := resolveAutostart(*common.configPath, *common.storePath, *common.directory, false)
 	if err != nil {
 		return commandError("autostart.status", "invalid_configuration", err, *common.jsonOutput, stdout, stderr)
 	}
@@ -116,13 +114,13 @@ func runAutostartStatus(args []string, stdout, stderr io.Writer) int {
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return commandError("autostart.status", "manifest_read", statErr, *common.jsonOutput, stdout, stderr)
 	}
-	domainTarget := "gui/" + strconv.Itoa(os.Getuid()) + "/" + autostart.Label(*common.sessionID)
+	domainTarget := "gui/" + strconv.Itoa(os.Getuid()) + "/" + autostart.Label()
 	loaded := exec.Command("launchctl", "print", domainTarget).Run() == nil
-	data := map[string]any{"enabled": enabled, "loaded": loaded, "session_id": *common.sessionID, "manifest": paths.manifest}
+	data := map[string]any{"enabled": enabled, "loaded": loaded, "manifest": paths.manifest}
 	if *common.jsonOutput {
 		return writeJSON(stdout, result{OK: true, Command: "autostart.status", Data: data})
 	}
-	fmt.Fprintf(stdout, "Autostart for %s: enabled=%t loaded=%t\n", *common.sessionID, enabled, loaded)
+	fmt.Fprintf(stdout, "AWP daemon autostart: enabled=%t loaded=%t\n", enabled, loaded)
 	return 0
 }
 
@@ -133,7 +131,7 @@ func runAutostartDisable(args []string, stdout, stderr io.Writer) int {
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	paths, _, err := resolveAutostart(*common.sessionID, *common.configPath, *common.storePath, *common.directory)
+	paths, _, err := resolveAutostart(*common.configPath, *common.storePath, *common.directory, false)
 	if err != nil {
 		return commandError("autostart.disable", "invalid_configuration", err, *common.jsonOutput, stdout, stderr)
 	}
@@ -145,20 +143,17 @@ func runAutostartDisable(args []string, stdout, stderr io.Writer) int {
 	} else if !errors.Is(removeErr, os.ErrNotExist) {
 		return commandError("autostart.disable", "manifest_remove", removeErr, *common.jsonOutput, stdout, stderr)
 	}
-	data := map[string]any{"enabled": false, "removed": removed, "session_id": *common.sessionID, "manifest": paths.manifest, "token_file": paths.token}
+	data := map[string]any{"enabled": false, "removed": removed, "manifest": paths.manifest, "token_file": paths.token}
 	if *common.jsonOutput {
 		return writeJSON(stdout, result{OK: true, Command: "autostart.disable", Data: data})
 	}
-	fmt.Fprintf(stdout, "Autostart disabled for %s. The protected token file remains at %s.\n", *common.sessionID, paths.token)
+	fmt.Fprintf(stdout, "AWP daemon autostart disabled. The protected token file remains at %s.\n", paths.token)
 	return 0
 }
 
 type autostartPaths struct{ binary, config, store, token, log, manifest string }
 
-func resolveAutostart(sessionID, configPath, storePath, directory string) (autostartPaths, config.Config, error) {
-	if sessionID == "" {
-		return autostartPaths{}, config.Config{}, fmt.Errorf("--session-id is required")
-	}
+func resolveAutostart(configPath, storePath, directory string, requireSessions bool) (autostartPaths, config.Config, error) {
 	resolvedConfig, err := config.Path(configPath)
 	if err != nil {
 		return autostartPaths{}, config.Config{}, err
@@ -178,8 +173,8 @@ func resolveAutostart(sessionID, configPath, storePath, directory string) (autos
 	if err != nil {
 		return autostartPaths{}, config.Config{}, err
 	}
-	if _, found := sessions.Get(registry, sessionID); !found {
-		return autostartPaths{}, config.Config{}, fmt.Errorf("AWP session %s is not bound locally", sessionID)
+	if requireSessions && len(sessions.List(registry)) == 0 {
+		return autostartPaths{}, config.Config{}, fmt.Errorf("no local AWP sessions are bound")
 	}
 	binary, err := os.Executable()
 	if err != nil {
@@ -197,7 +192,7 @@ func resolveAutostart(sessionID, configPath, storePath, directory string) (autos
 		binary: binary, config: resolvedConfig, store: resolvedStore,
 		token:    filepath.Join(stateDir, "autostart.token"),
 		log:      filepath.Join(stateDir, "autostart.log"),
-		manifest: autostart.Filename(directory, sessionID),
+		manifest: autostart.Filename(directory),
 	}, cfg, nil
 }
 

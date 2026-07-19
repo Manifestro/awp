@@ -11,7 +11,6 @@ func TestRenderLaunchdUsesExplicitPathsAndReconnect(t *testing.T) {
 		ConfigPath: "/tmp/config.json",
 		StorePath:  "/tmp/sessions.json",
 		TokenFile:  "/tmp/token",
-		SessionID:  "session/one",
 		LogPath:    "/tmp/awp.log",
 		PathEnv:    "/usr/local/bin:/usr/bin:/bin",
 	})
@@ -19,7 +18,7 @@ func TestRenderLaunchdUsesExplicitPathsAndReconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, expected := range []string{"net.manifestro.awp.session-one", "/opt/awp &amp; tools/awp", "--reconnect", "--token-file"} {
+	for _, expected := range []string{"net.manifestro.awp", "/opt/awp &amp; tools/awp", "<string>daemon</string>", "--token-file"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("manifest does not contain %q:\n%s", expected, text)
 		}

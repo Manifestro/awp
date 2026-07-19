@@ -53,12 +53,11 @@ awp sessions bind \
   --json
 ```
 
-Connect the client and register the bound AWP session with the service:
+Start the daemon. It registers every locally bound AWP session over one device connection:
 
 ```bash
-awp connect \
+awp daemon \
   --config /tmp/awp-example.json \
-  --session-id ses_01JABC123 \
   --once \
   --json
 ```

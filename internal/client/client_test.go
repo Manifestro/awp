@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -39,19 +40,26 @@ func TestRunHandshakeDeliveryAndAck(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		var bind protocol.Message
-		if err := wsjson.Read(request.Context(), connection, &bind); err != nil {
-			t.Error(err)
-			return
-		}
-		if bind.Action != protocol.ActionSessionBind {
-			t.Errorf("binding action = %q, want session.bind", bind.Action)
-			return
-		}
-		bound := mustMessage(t, protocol.ActionSessionBound, map[string]any{"session_id": "ses_test", "status": "active"})
-		if err := wsjson.Write(request.Context(), connection, bound); err != nil {
-			t.Error(err)
-			return
+		for _, sessionID := range []string{"ses_first", "ses_test"} {
+			var bind protocol.Message
+			if err := wsjson.Read(request.Context(), connection, &bind); err != nil {
+				t.Error(err)
+				return
+			}
+			if bind.Action != protocol.ActionSessionBind {
+				t.Errorf("binding action = %q, want session.bind", bind.Action)
+				return
+			}
+			bindData, decodeErr := protocol.DecodeData[protocol.SessionBindData](bind)
+			if decodeErr != nil || bindData.SessionID != sessionID {
+				t.Errorf("binding = %#v, error = %v, want session %s", bindData, decodeErr, sessionID)
+				return
+			}
+			bound := mustMessage(t, protocol.ActionSessionBound, map[string]any{"session_id": sessionID, "status": "active"})
+			if err := wsjson.Write(request.Context(), connection, bound); err != nil {
+				t.Error(err)
+				return
+			}
 		}
 		ping := mustMessage(t, protocol.ActionHeartbeatPing, map[string]any{})
 		if err := wsjson.Write(request.Context(), connection, ping); err != nil {
@@ -106,11 +114,13 @@ func TestRunHandshakeDeliveryAndAck(t *testing.T) {
 			DeviceID:   "dev_test",
 			TokenEnv:   "AWP_TOKEN",
 		},
-		Token:     "test-token",
-		Version:   "test",
-		SessionID: "ses_test",
-		Adapter:   "codex",
-		Once:      true,
+		Token:   "test-token",
+		Version: "test",
+		Sessions: []SessionRegistration{
+			{SessionID: "ses_first", Adapter: "codex", Metadata: map[string]any{}},
+			{SessionID: "ses_test", Adapter: "codex", Metadata: map[string]any{}},
+		},
+		Once: true,
 		Receive: func(message protocol.Message) error {
 			received = append(received, message.Action)
 			return nil
@@ -120,7 +130,7 @@ func TestRunHandshakeDeliveryAndAck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if len(received) != 3 || received[0] != protocol.ActionServerWelcome || received[1] != protocol.ActionSessionBound || received[2] != protocol.ActionEventDeliver {
+	if len(received) != 4 || received[0] != protocol.ActionServerWelcome || received[1] != protocol.ActionSessionBound || received[2] != protocol.ActionSessionBound || received[3] != protocol.ActionEventDeliver {
 		t.Fatalf("received actions = %#v", received)
 	}
 
@@ -134,6 +144,90 @@ func TestRunHandshakeDeliveryAndAck(t *testing.T) {
 	}
 	if data.DeliveryID != "dlv_test" || data.EventID != "evt_test" || data.Status != "completed" {
 		t.Fatalf("ack data = %#v", data)
+	}
+}
+
+func TestConcurrentDeliveryDoesNotBlockHeartbeat(t *testing.T) {
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	serverDone := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		defer close(serverDone)
+		connection, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer connection.CloseNow()
+		var hello protocol.Message
+		if err := wsjson.Read(request.Context(), connection, &hello); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := wsjson.Write(request.Context(), connection, mustMessage(t, protocol.ActionServerWelcome, map[string]any{"device_id": "dev_concurrent"})); err != nil {
+			t.Error(err)
+			return
+		}
+		var bind protocol.Message
+		if err := wsjson.Read(request.Context(), connection, &bind); err != nil {
+			t.Error(err)
+			return
+		}
+		delivery := mustMessage(t, protocol.ActionEventDeliver, protocol.DeliveryData{
+			DeliveryID: "dlv_concurrent", EventID: "evt_concurrent",
+			Target: json.RawMessage(`{"device_id":"dev_concurrent","session_id":"ses_concurrent"}`),
+			Event:  json.RawMessage(`{"source":"test","name":"slow.event","data":{}}`), Attempt: 1,
+		})
+		if err := wsjson.Write(request.Context(), connection, delivery); err != nil {
+			t.Error(err)
+			return
+		}
+		<-handlerStarted
+		ping := mustMessage(t, protocol.ActionHeartbeatPing, map[string]any{})
+		if err := wsjson.Write(request.Context(), connection, ping); err != nil {
+			t.Error(err)
+			return
+		}
+		var pong protocol.Message
+		if err := wsjson.Read(request.Context(), connection, &pong); err != nil {
+			t.Error(err)
+			return
+		}
+		if pong.Action != protocol.ActionHeartbeatPong {
+			t.Errorf("action while handler blocked = %s, want heartbeat.pong", pong.Action)
+			return
+		}
+		close(releaseHandler)
+		var ack protocol.Message
+		if err := wsjson.Read(request.Context(), connection, &ack); err != nil {
+			t.Error(err)
+			return
+		}
+		if ack.Action != protocol.ActionEventAck {
+			t.Errorf("action after handler = %s, want event.ack", ack.Action)
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	serviceURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	err := Run(ctx, Options{
+		Config: config.Config{Version: "0.1", ServiceURL: serviceURL, DeviceID: "dev_concurrent", TokenEnv: "AWP_TOKEN"},
+		Token:  "test", Version: "test", Concurrent: true,
+		Sessions: []SessionRegistration{{SessionID: "ses_concurrent", Adapter: "codex"}},
+		Handle: func(context.Context, protocol.DeliveryData) error {
+			close(handlerStarted)
+			<-releaseHandler
+			return nil
+		},
+	})
+	cancel()
+	<-serverDone
+	if err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	if !strings.Contains(err.Error(), "read AWP message") {
+		t.Fatalf("Run() error = %v", err)
 	}
 }
 

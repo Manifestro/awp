@@ -98,21 +98,21 @@ func TestAutostartEnableIsOptInAndEditable(t *testing.T) {
 	t.Setenv("AWP_TEST_TOKEN", "secret-test-token")
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"autostart", "enable", "--session-id", "ses_test", "--config", configPath, "--store", storePath, "--directory", directory, "--json"}, &stdout, &stderr)
+	code := Run([]string{"autostart", "enable", "--config", configPath, "--store", storePath, "--directory", directory, "--json"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("enable code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
-	manifest := autostart.Filename(directory, "ses_test")
+	manifest := autostart.Filename(directory)
 	contents, err := os.ReadFile(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(contents), "--reconnect") {
-		t.Fatalf("manifest does not enable reconnect: %s", contents)
+	if !strings.Contains(string(contents), "<string>daemon</string>") || strings.Contains(string(contents), "--session-id") {
+		t.Fatalf("manifest does not run one multi-session daemon: %s", contents)
 	}
 	stdout.Reset()
 	stderr.Reset()
-	code = Run([]string{"autostart", "disable", "--session-id", "ses_test", "--config", configPath, "--store", storePath, "--directory", directory, "--json"}, &stdout, &stderr)
+	code = Run([]string{"autostart", "disable", "--config", configPath, "--store", storePath, "--directory", directory, "--json"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("disable code=%d stderr=%s", code, stderr.String())
 	}

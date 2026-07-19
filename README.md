@@ -213,6 +213,7 @@ The repository currently contains:
 
 - a draft AWP `0.1` WebSocket and HTTP protocol;
 - a Go client with machine-readable, agent-friendly commands;
+- a multi-session daemon using one outbound connection per device;
 - a local session registry that never exposes runtime session IDs to the service;
 - a Codex CLI adapter using `codex exec resume`;
 - reconnect with exponential backoff;
@@ -258,45 +259,40 @@ Configure it using non-interactive commands that Codex or Claude Code can also e
   --json
 ```
 
-For a long-running foreground client with automatic reconnect and exponential backoff:
+For a long-running multi-session client, start the daemon. It loads every binding from the local `sessions.json`, registers them over one WebSocket, routes each delivery by `target.session_id`, and reconnects with exponential backoff:
 
 ```bash
-./bin/awp connect \
-  --session-id ses_01JABC123 \
-  --reconnect \
-  --json
+./bin/awp daemon --json
 ```
 
 ### Optional autostart
 
-Autostart is explicit and editable; installing the AWP client never enables it automatically. The first implementation uses a per-user macOS `launchd` agent for each AWP session.
+Autostart is explicit and editable; installing the AWP client never enables it automatically. The first implementation uses one per-user macOS `launchd` agent for the multi-session daemon.
 
 ```bash
 # Enable launch at the next login, but do not start anything now.
 ./bin/awp autostart enable \
-  --session-id ses_01JABC123 \
   --json
 
 # Enable or update the definition and also start it now.
 ./bin/awp autostart enable \
-  --session-id ses_01JABC123 \
   --start-now \
   --json
 
 # Inspect both the saved definition and current launchd state.
 ./bin/awp autostart status \
-  --session-id ses_01JABC123 \
   --json
 
 # Stop the launch agent and remove its autostart definition.
 ./bin/awp autostart disable \
-  --session-id ses_01JABC123 \
   --json
 ```
 
-`autostart enable` copies the token from the configured environment variable into a separate local file with mode `0600`, because `launchd` does not inherit an interactive shell's environment. The token is never embedded in the plist or the main configuration. `autostart disable` intentionally leaves that protected token file in place because another session may use it. Running `enable` again updates the paths, token, and launch definition.
+`autostart enable` copies the token from the configured environment variable into a separate local file with mode `0600`, because `launchd` does not inherit an interactive shell's environment. The token is never embedded in the plist or the main configuration. `autostart disable` intentionally leaves that protected token file in place. Running `enable --start-now` again updates the paths and token, restarts the daemon, and reloads all session bindings.
 
-On platforms without an autostart adapter, `awp connect --reconnect` remains available for systemd, containers, or another process supervisor. Native Linux service management is planned.
+On platforms without an autostart adapter, run `awp daemon` under systemd, a container, or another process supervisor. Native Linux service management is planned.
+
+The current configuration connects one daemon to one AWP Service while multiplexing any number of event sources and local sessions over that connection. Supporting several independent AWP Service endpoints from one daemon will use named connection profiles and is a separate planned capability.
 
 The bearer token is not written to the configuration file. `token_env` contains only the name of the environment variable that holds it.
 
@@ -335,6 +331,8 @@ The main open design questions are:
 - [x] Build an AWP Client MVP
 - [x] Build a Codex CLI adapter
 - [x] Add reconnect/backoff and opt-in macOS autostart
+- [x] Add one-connection multi-session daemon
+- [ ] Add named profiles for multiple independent AWP Services
 - [ ] Build a Claude Code adapter
 - [ ] Add native Linux systemd autostart
 - [ ] Add the first Sinores integration

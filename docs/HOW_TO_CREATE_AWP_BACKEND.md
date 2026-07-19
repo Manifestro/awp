@@ -215,6 +215,8 @@ A session already owned by another tenant or device MUST NOT be silently reassig
 
 Bindings SHOULD be durable. An `active` connection is transient; the session identity itself should survive disconnects so Event Servers can publish while the client is offline.
 
+One device connection may bind multiple sessions. The service MUST support multiple `session.bind` messages after one `server.welcome`; it SHOULD NOT require or create a WebSocket per session. Events from independent systems such as Sinores, GitHub, email, and monitoring can therefore share the transport while remaining isolated by `event.source`, tenant, target device, and target session.
+
 ### 4.4 Heartbeats
 
 Either peer may send:
