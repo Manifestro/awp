@@ -10,6 +10,16 @@ AWP is created and developed by the [Manifestro](https://github.com/Manifestro) 
 
 > **Project status:** AWP is an early design draft. The protocol, transports, and APIs are not stable yet. We are developing the standard in public and welcome discussion and contributions.
 
+## Documentation
+
+| Document | Purpose |
+| --- | --- |
+| [AWP wire protocol](./docs/PROTOCOL.md) | AWP `0.1` envelopes, actions, connection lifecycle, and acknowledgements |
+| [Backend implementation guide](./docs/HOW_TO_CREATE_AWP_BACKEND.md) | Persistence, routing, retries, security, scaling, and compatibility requirements |
+| [JSON examples](./docs/examples) | Ready-to-use messages for every current protocol action |
+| [Conceptual draft](./AWP.md) | Original problem statement, roles, and design direction |
+| [Example backend](./example/backend) | Local FastAPI service for development and end-to-end testing |
+
 ## Why AWP?
 
 Agent sessions often need to wait for something outside their current execution:
@@ -88,17 +98,24 @@ Examples include Sinores, GitHub integrations, email services, monitoring system
 
 ## Event format
 
-The smallest AWP event envelope is:
+Every AWP `0.1` wire message uses a common envelope:
 
 ```json
 {
   "type": "awp",
+  "version": "0.1",
+  "id": "msg_01JABC123",
+  "action": "event.publish",
+  "timestamp": "2026-07-19T12:00:00Z",
   "data": {}
 }
 ```
 
-- `type` identifies the payload as an AWP event.
-- `data` contains application-specific JSON supplied by the Event Server.
+- `type` and `version` identify the protocol.
+- `id` makes the individual protocol message traceable.
+- `action` selects the schema and operation.
+- `timestamp` is an RFC 3339 timestamp with a timezone.
+- `data` contains fields for that action. Application-specific content belongs inside `data.event.data` for publication and delivery actions.
 
 AWP transports `data` without defining the business fields inside it. This keeps the core protocol independent of WhatsApp, GitHub, email, or any other event source.
 
@@ -109,13 +126,27 @@ AWP transports `data` without defining the business fields inside it. This keeps
 ```json
 {
   "type": "awp",
+  "version": "0.1",
+  "id": "msg_publish_01",
+  "action": "event.publish",
+  "timestamp": "2026-07-19T12:00:02Z",
   "data": {
-    "source": "sinores",
-    "event": "message.received",
-    "channel_id": "channel_123",
-    "from": "+77001234567",
-    "message_id": "wa_message_456",
-    "text": "Yes, tomorrow at 10 works"
+    "event_id": "evt_sinores_01",
+    "target": {
+      "device_id": "dev_macbook_01",
+      "session_id": "ses_01JABC123"
+    },
+    "event": {
+      "source": "sinores",
+      "name": "message.received",
+      "timestamp": "2026-07-19T12:00:02Z",
+      "data": {
+        "channel_id": "channel_123",
+        "from": "+77001234567",
+        "message_id": "wa_message_456",
+        "text": "Yes, tomorrow at 10 works"
+      }
+    }
   }
 }
 ```
@@ -176,24 +207,43 @@ AWP complements MCP rather than replacing it:
 | MCP | Agent → external system | Give an active agent tools, resources, and context |
 | AWP | External system → agent session | Deliver an event and resume an inactive agent |
 
-## Current work
+## Current implementation
 
-The conceptual draft is being developed in [AWP.md](./AWP.md). The first client/server wire format and ready-to-use JSON fixtures are documented in [docs/PROTOCOL.md](./docs/PROTOCOL.md) and [`docs/examples`](./docs/examples). Backend implementers should use [docs/HOW_TO_CREATE_AWP_BACKEND.md](./docs/HOW_TO_CREATE_AWP_BACKEND.md) for the complete service lifecycle, persistence, retry, scaling, security, and compatibility requirements.
+The repository currently contains:
 
-An early Go client foundation is also available. Its configuration commands are non-interactive and support stable JSON output so coding agents can configure and inspect the client directly:
+- a draft AWP `0.1` WebSocket and HTTP protocol;
+- a Go client with machine-readable, agent-friendly commands;
+- a local session registry that never exposes runtime session IDs to the service;
+- a Codex CLI adapter using `codex exec resume`;
+- reconnect with exponential backoff;
+- explicit, reversible macOS autostart;
+- an in-memory FastAPI backend for local interoperability tests;
+- a production-oriented backend implementation guide.
+
+The FastAPI backend is a development example, not a durable production service. Claude Code, Linux autostart, formal JSON Schemas, and a conformance suite are not implemented yet.
+
+## Go client quick start
+
+Build the client:
 
 ```bash
-awp config set \
+go build -o ./bin/awp ./cmd/awp
+```
+
+Configure it using non-interactive commands that Codex or Claude Code can also execute directly:
+
+```bash
+./bin/awp config set \
   --service-url wss://awp.example.com/ws \
   --device-id dev_macbook_01 \
   --token-env AWP_TOKEN \
   --json
 
-awp config show --json
-awp doctor --json
+./bin/awp config show --json
+./bin/awp doctor --json
 
 # Bind an opaque AWP session to a local Codex CLI session.
-awp sessions bind \
+./bin/awp sessions bind \
   --session-id ses_01JABC123 \
   --adapter codex \
   --runtime-session-id 019f79c6-0c42-76a3-8812-8ec8b77d3e66 \
@@ -201,7 +251,7 @@ awp sessions bind \
   --json
 
 # Connect, wake Codex for one delivered event, and exit.
-awp connect \
+./bin/awp connect \
   --session-id ses_01JABC123 \
   --once \
   --timeout 30s \
@@ -211,7 +261,7 @@ awp connect \
 For a long-running foreground client with automatic reconnect and exponential backoff:
 
 ```bash
-awp connect \
+./bin/awp connect \
   --session-id ses_01JABC123 \
   --reconnect \
   --json
@@ -223,23 +273,23 @@ Autostart is explicit and editable; installing the AWP client never enables it a
 
 ```bash
 # Enable launch at the next login, but do not start anything now.
-awp autostart enable \
+./bin/awp autostart enable \
   --session-id ses_01JABC123 \
   --json
 
 # Enable or update the definition and also start it now.
-awp autostart enable \
+./bin/awp autostart enable \
   --session-id ses_01JABC123 \
   --start-now \
   --json
 
 # Inspect both the saved definition and current launchd state.
-awp autostart status \
+./bin/awp autostart status \
   --session-id ses_01JABC123 \
   --json
 
 # Stop the launch agent and remove its autostart definition.
-awp autostart disable \
+./bin/awp autostart disable \
   --session-id ses_01JABC123 \
   --json
 ```
@@ -260,26 +310,28 @@ The universal AWP event prompt is passed through stdin. The adapter does not add
 
 The main open design questions are:
 
-- how an event securely identifies its target client and session;
-- how a session subscribes to events;
-- how pairing and authentication work;
-- how WebSocket delivery and reconnection work;
-- how delivery acknowledgements and retries work;
-- how long offline events remain queued;
-- how manual and automatic wake policies are expressed;
-- how runtime permissions are preserved when a session resumes.
+- how clients and sessions are securely paired and provisioned;
+- how publishers receive narrowly scoped authorization;
+- how subscriptions and source filters are expressed;
+- what default retention, retry, and dead-letter policies should be standardized;
+- how manual approval and automatic wake policies are represented on the wire;
+- how wake batching and coalescing should work;
+- which capabilities need negotiation across protocol versions;
+- how conformance is validated across independent clients and services.
 
 ## Roadmap
 
 - [x] Define the problem and core roles
 - [x] Publish the initial event envelope
-- [ ] Define protocol terminology and identifiers
+- [x] Define initial protocol terminology and identifiers
 - [ ] Specify pairing and authentication
-- [ ] Specify subscriptions and session bindings
-- [ ] Specify the WebSocket transport
-- [ ] Specify acknowledgement and retry behavior
+- [ ] Specify subscriptions
+- [x] Specify initial session bindings
+- [x] Specify the WebSocket transport
+- [x] Specify initial acknowledgement and retry behavior
 - [ ] Create a JSON Schema for AWP events
-- [ ] Build a reference AWP Service
+- [x] Build a local example AWP Service
+- [ ] Build a durable reference AWP Service
 - [x] Build an AWP Client MVP
 - [x] Build a Codex CLI adapter
 - [x] Add reconnect/backoff and opt-in macOS autostart
