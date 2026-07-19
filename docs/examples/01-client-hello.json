@@ -1,0 +1,21 @@
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_hello_01",
+  "action": "client.hello",
+  "timestamp": "2026-07-19T12:00:00Z",
+  "data": {
+    "device_id": "dev_macbook_01",
+    "client": {
+      "name": "awp-go",
+      "version": "0.1.0"
+    },
+    "capabilities": {
+      "adapters": [
+        "codex",
+        "claude-code"
+      ],
+      "resume": true
+    }
+  }
+}

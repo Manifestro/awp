@@ -1,0 +1,25 @@
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_publish_01",
+  "action": "event.publish",
+  "timestamp": "2026-07-19T12:00:02Z",
+  "data": {
+    "event_id": "evt_sinores_01",
+    "target": {
+      "device_id": "dev_macbook_01",
+      "session_id": "ses_01JABC123"
+    },
+    "event": {
+      "source": "sinores",
+      "name": "message.received",
+      "timestamp": "2026-07-19T12:00:02Z",
+      "data": {
+        "channel_id": "channel_123",
+        "from": "+77001234567",
+        "message_id": "wa_message_456",
+        "text": "Yes, tomorrow at 10 works"
+      }
+    }
+  }
+}

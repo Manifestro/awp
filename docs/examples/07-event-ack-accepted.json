@@ -1,0 +1,12 @@
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_ack_01",
+  "action": "event.ack",
+  "timestamp": "2026-07-19T12:00:03Z",
+  "data": {
+    "delivery_id": "dlv_01JABC123",
+    "event_id": "evt_sinores_01",
+    "status": "accepted"
+  }
+}

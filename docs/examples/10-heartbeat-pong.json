@@ -1,0 +1,10 @@
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_pong_01",
+  "action": "heartbeat.pong",
+  "timestamp": "2026-07-19T12:00:30Z",
+  "data": {
+    "reply_to": "msg_ping_01"
+  }
+}

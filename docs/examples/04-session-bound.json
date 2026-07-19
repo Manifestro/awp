@@ -1,0 +1,11 @@
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_bound_01",
+  "action": "session.bound",
+  "timestamp": "2026-07-19T12:00:01Z",
+  "data": {
+    "session_id": "ses_01JABC123",
+    "status": "active"
+  }
+}

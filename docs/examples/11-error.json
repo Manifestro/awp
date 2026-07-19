@@ -1,0 +1,13 @@
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_error_01",
+  "action": "error",
+  "timestamp": "2026-07-19T12:00:05Z",
+  "data": {
+    "code": "session_not_found",
+    "message": "The target session binding does not exist",
+    "reply_to": "msg_publish_01",
+    "retryable": false
+  }
+}

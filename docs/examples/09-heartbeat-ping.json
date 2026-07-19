@@ -1,0 +1,8 @@
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_ping_01",
+  "action": "heartbeat.ping",
+  "timestamp": "2026-07-19T12:00:30Z",
+  "data": {}
+}

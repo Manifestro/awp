@@ -1,0 +1,13 @@
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_welcome_01",
+  "action": "server.welcome",
+  "timestamp": "2026-07-19T12:00:00Z",
+  "data": {
+    "device_id": "dev_macbook_01",
+    "connection_id": "conn_01JABC123",
+    "heartbeat_interval_seconds": 30,
+    "max_message_bytes": 1048576
+  }
+}

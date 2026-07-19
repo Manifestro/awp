@@ -1,0 +1,14 @@
+{
+  "type": "awp",
+  "version": "0.1",
+  "id": "msg_bind_01",
+  "action": "session.bind",
+  "timestamp": "2026-07-19T12:00:01Z",
+  "data": {
+    "session_id": "ses_01JABC123",
+    "adapter": "codex",
+    "metadata": {
+      "label": "Sinores WhatsApp session"
+    }
+  }
+}
