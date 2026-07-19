@@ -97,7 +97,7 @@ Example with Sinores:
 | [JSON messages](./docs/examples) | Current protocol examples |
 | [Conceptual draft](./AWP.md) | Roles, provider-owned endpoint model, and design direction |
 | [FastAPI example](./example/backend) | Local example of one provider's AWP endpoint |
-| [Release and installer hosting](./docs/RELEASING.md) | GitHub Releases, Pages, DNS, and `awp.manifestro.io` setup |
+| [Release and installer hosting](./docs/RELEASING.md) | GitHub Releases and serving `install.sh` from the Manifestro website |
 
 ## Current implementation
 

@@ -23,26 +23,15 @@ The installer resolves `/releases/latest`, downloads the matching archive, and v
 
 ## Host `awp.manifestro.io`
 
-The `site` directory is deployed by `.github/workflows/pages.yml`. It contains the public `install.sh` and the custom-domain `CNAME` file.
+The installer is served by the Manifestro Next.js website, not GitHub Pages. Its canonical source is [`site/install.sh`](../site/install.sh) in this repository.
 
-Repository setup:
+Copy it to `public/install.sh` in the Next.js application during development or deployment. Next.js then exposes the static asset at `/install.sh`. Configure `awp.manifestro.io` to point to that application and verify:
 
-1. In GitHub repository settings, set **Pages → Source** to **GitHub Actions**.
-2. In the DNS zone for `manifestro.io`, create:
+```bash
+curl -LsSf https://awp.manifestro.io/install.sh | sh
+```
 
-   ```text
-   Type:  CNAME
-   Name:  awp
-   Value: manifestro.github.io
-   ```
-
-3. Wait for GitHub Pages to verify the custom domain and issue TLS.
-4. Enable **Enforce HTTPS**.
-5. Verify the exact public file:
-
-   ```bash
-   curl -LsSf https://awp.manifestro.io/install.sh | sh
-   ```
+The website only serves the installer script. The script detects the platform and downloads and verifies the matching binary from GitHub Releases.
 
 No release can be installed until at least one `v*` tag has completed the Release workflow successfully.
 
