@@ -8,7 +8,7 @@ MCP lets an active agent call tools. AWP lets an external system wake the agent 
 
 AWP is created and developed by the [Manifestro](https://github.com/Manifestro) team. The canonical repository is [Manifestro/awp](https://github.com/Manifestro/awp).
 
-> **Project status:** AWP is an early design draft. The protocol, transports, and APIs are not stable yet. We are developing the standard in public and welcome discussion and contributions.
+> **Project status:** AWP is a runnable MVP and an early protocol draft. The Go client, multi-session daemon, Codex CLI adapter, macOS autostart, and local example backend work end to end. The protocol and APIs are not stable yet, and the example backend is not production-ready.
 
 ## Documentation
 
@@ -223,15 +223,95 @@ The repository currently contains:
 
 The FastAPI backend is a development example, not a durable production service. Claude Code, Linux autostart, formal JSON Schemas, and a conformance suite are not implemented yet.
 
-## Go client quick start
+## Run the MVP locally
 
-Build the client:
+Requirements:
+
+- Go installed;
+- Docker with Compose for the example backend;
+- Codex CLI installed and available in `PATH`;
+- an existing inactive Codex session ID and its workspace.
+
+Build a stable client binary from the repository root:
 
 ```bash
 go build -o ./bin/awp ./cmd/awp
 ```
 
-Configure it using non-interactive commands that Codex or Claude Code can also execute directly:
+Start the local example AWP Service:
+
+```bash
+export AWP_TOKEN=local-dev-token
+docker compose -f example/backend/compose.yaml up -d --build
+```
+
+Configure the client. The example JSON fixtures target `dev_macbook_01`:
+
+```bash
+./bin/awp config set \
+  --service-url ws://localhost:8000/ws \
+  --device-id dev_macbook_01 \
+  --config ./.awp-local/config.json \
+  --json
+```
+
+Bind the fixture's public AWP session to a real local Codex session. The runtime session ID never leaves this computer:
+
+```bash
+./bin/awp sessions bind \
+  --config ./.awp-local/config.json \
+  --session-id ses_01JABC123 \
+  --adapter codex \
+  --runtime-session-id <existing-codex-session-id> \
+  --workspace /absolute/path/to/project \
+  --json
+```
+
+Start the multi-session daemon in one terminal:
+
+```bash
+AWP_TOKEN=local-dev-token ./bin/awp daemon \
+  --config ./.awp-local/config.json \
+  --json
+```
+
+Publish the example event from another terminal:
+
+```bash
+curl -X POST http://localhost:8000/events \
+  -H 'Authorization: Bearer local-dev-token' \
+  -H 'Content-Type: application/json' \
+  --data @docs/examples/05-event-publish-sinores.json
+```
+
+The expected flow is:
+
+```text
+POST /events
+  → event.deliver over WebSocket
+  → local session lookup
+  → codex exec resume --json <runtime-session-id> -
+  → completed or failed event.ack
+```
+
+Inspect the service and local bindings:
+
+```bash
+curl http://localhost:8000/health
+./bin/awp sessions list --config ./.awp-local/config.json --json
+```
+
+Stop the local backend when finished:
+
+```bash
+docker compose -f example/backend/compose.yaml down
+```
+
+The example backend stores connections, bindings, events, and acknowledgements only in memory. Restarting it clears that state. Use the [backend implementation guide](./docs/HOW_TO_CREATE_AWP_BACKEND.md) for a durable deployment.
+
+## Connect to another AWP Service
+
+The client commands are non-interactive and provide stable JSON output so Codex or Claude Code can configure and inspect AWP directly:
 
 ```bash
 ./bin/awp config set \
