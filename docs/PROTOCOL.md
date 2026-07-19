@@ -143,6 +143,18 @@ The target is part of the action data:
 
 The provider validates and persists the event, creates a `delivery_id`, and sends `event.deliver` to the connected client.
 
+Every `event.deliver.data` object MUST contain all of these fields:
+
+| Field | Required | Rule |
+| --- | --- | --- |
+| `delivery_id` | Yes | Non-empty stable ID for this delivery. Reuse it when retrying the same delivery. |
+| `event_id` | Yes | Non-empty stable ID for the underlying provider event. |
+| `target` | Yes | Object containing non-empty `device_id` and `session_id`. |
+| `event` | Yes | Object containing non-empty `source`, non-empty `name`, an RFC 3339 `timestamp`, and object `data`. |
+| `attempt` | Yes | Positive integer starting at `1` and increasing on redelivery. |
+
+`delivery_id` and `event_id` belong directly inside `event.deliver.data`. They MUST NOT be placed only in the envelope, `target`, `event`, or `event.data`. The reference client rejects a delivery with either ID missing and does not acknowledge it.
+
 Delivery semantics are at least once. The provider MAY send the same `delivery_id` again until it receives an acknowledgement.
 
 ### 6. Delivery acknowledgement

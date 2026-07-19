@@ -201,6 +201,22 @@ When your application receives something relevant, first create a durable event 
 
 AWP does not interpret `event.data`; its schema belongs to your product. Treat it as untrusted input and avoid including secrets the agent does not need.
 
+The following fields are mandatory in every delivery:
+
+```text
+data.delivery_id
+data.event_id
+data.target.device_id
+data.target.session_id
+data.event.source
+data.event.name
+data.event.timestamp
+data.event.data
+data.attempt
+```
+
+In particular, `delivery_id` and `event_id` must be direct children of `data`. If either is missing, the reference client cannot produce an ACK, rejects the message, and reconnects. If your server keeps replaying the malformed pending event, the client will remain in a reconnect loop.
+
 Delivery is **at least once**. Keep `event_id` and `delivery_id` stable across retries so the receiver can deduplicate them. If the device is offline, retain the pending delivery and send it after reconnect and handshake.
 
 ## 5. Process acknowledgements

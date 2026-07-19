@@ -382,6 +382,17 @@ The provider's AWP delivery component creates `event.deliver`; an upstream appli
 
 The tuple `(tenant_id, device_id, session_id)` is the routing boundary inside one provider. Before every send, the provider MUST verify that the current socket belongs to the same authenticated tenant and device as the delivery.
 
+Before writing an `event.deliver` frame, validate the final wire object—not only the stored event:
+
+- `data.delivery_id` is present and non-empty;
+- `data.event_id` is present and non-empty;
+- `data.target.device_id` and `data.target.session_id` are present and authorized;
+- `data.event.source` and `data.event.name` are present and non-empty;
+- `data.event.timestamp` is RFC 3339 and `data.event.data` is an object;
+- `data.attempt` is a positive integer.
+
+The IDs are required directly under `data`. A client cannot acknowledge, retry, or deduplicate a delivery without them. The reference Go client closes the connection without sending an ACK when either is missing; repeatedly sending that malformed pending event will therefore create a reconnect loop.
+
 The provider MUST reuse the same `delivery_id` when retrying the same delivery. It SHOULD create a new envelope message `id` and increment `attempt` for each new delivery attempt. The original event contents MUST not change.
 
 Do not hold a global application lock while performing network I/O. Resolve the current connection and claim work atomically, release the lock/transaction, then send. A failed send returns the delivery to retryable state.
