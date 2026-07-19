@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/Manifestro/awp/internal/adapters"
 	"github.com/Manifestro/awp/internal/client"
@@ -58,6 +59,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runConnect(args[1:], stdout, stderr)
 	case "sessions":
 		return runSessions(args[1:], stdout, stderr)
+	case "autostart":
+		return runAutostart(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 		printUsage(stderr)
@@ -74,6 +77,10 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	timeout := flags.Duration("timeout", 0, "optional connection timeout, for example 30s")
 	sessionID := flags.String("session-id", "", "AWP session binding to register after connecting")
 	storePath := flags.String("store", "", "session registry file path")
+	tokenFile := flags.String("token-file", "", "read bearer token from a protected file")
+	reconnect := flags.Bool("reconnect", false, "reconnect forever with exponential backoff")
+	reconnectInitial := flags.Duration("reconnect-initial", time.Second, "initial reconnect delay")
+	reconnectMax := flags.Duration("reconnect-max", 30*time.Second, "maximum reconnect delay")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -90,8 +97,19 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		return commandError("connect", "invalid_config", err, *jsonOutput, stdout, stderr)
 	}
 	token := os.Getenv(cfg.TokenEnv)
+	if *tokenFile != "" {
+		contents, readErr := os.ReadFile(*tokenFile)
+		if readErr != nil {
+			return commandError("connect", "token_file_read", readErr, *jsonOutput, stdout, stderr)
+		}
+		token = strings.TrimSpace(string(contents))
+	}
 	if token == "" {
-		return commandError("connect", "token_missing", fmt.Errorf("%s is not set", cfg.TokenEnv), *jsonOutput, stdout, stderr)
+		source := cfg.TokenEnv + " is not set"
+		if *tokenFile != "" {
+			source = *tokenFile + " is empty"
+		}
+		return commandError("connect", "token_missing", errors.New(source), *jsonOutput, stdout, stderr)
 	}
 
 	ctx := context.Background()
@@ -132,7 +150,7 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 			return resolved.Run(ctx, binding, delivery)
 		}
 	}
-	err = client.Run(ctx, client.Options{
+	clientOptions := client.Options{
 		Config:    cfg,
 		Token:     token,
 		Version:   Version,
@@ -141,7 +159,15 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		Once:      *once,
 		Receive:   receive,
 		Handle:    handle,
-	})
+	}
+	if *reconnect {
+		err = client.RunWithReconnect(ctx, clientOptions, client.ReconnectPolicy{
+			InitialDelay: *reconnectInitial,
+			MaxDelay:     *reconnectMax,
+		}, stderr)
+	} else {
+		err = client.Run(ctx, clientOptions)
+	}
 	if err != nil {
 		code := "connection_failed"
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -342,7 +368,10 @@ Usage:
   awp sessions bind --session-id <id> --adapter codex --runtime-session-id <id> [--workspace <path>] [--json]
   awp sessions list [--json]
   awp sessions remove --session-id <id> [--json]
-  awp connect [--config <path>] [--session-id <id>] [--store <path>] [--once] [--timeout 30s] [--json]
+  awp autostart enable --session-id <id> [--start-now] [--json]
+  awp autostart status --session-id <id> [--json]
+  awp autostart disable --session-id <id> [--json]
+  awp connect [--config <path>] [--session-id <id>] [--store <path>] [--token-file <path>] [--reconnect] [--once] [--timeout 30s] [--json]
 
 Environment:
   AWP_CONFIG  Override the default configuration path.

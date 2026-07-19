@@ -208,6 +208,46 @@ awp connect \
   --json
 ```
 
+For a long-running foreground client with automatic reconnect and exponential backoff:
+
+```bash
+awp connect \
+  --session-id ses_01JABC123 \
+  --reconnect \
+  --json
+```
+
+### Optional autostart
+
+Autostart is explicit and editable; installing the AWP client never enables it automatically. The first implementation uses a per-user macOS `launchd` agent for each AWP session.
+
+```bash
+# Enable launch at the next login, but do not start anything now.
+awp autostart enable \
+  --session-id ses_01JABC123 \
+  --json
+
+# Enable or update the definition and also start it now.
+awp autostart enable \
+  --session-id ses_01JABC123 \
+  --start-now \
+  --json
+
+# Inspect both the saved definition and current launchd state.
+awp autostart status \
+  --session-id ses_01JABC123 \
+  --json
+
+# Stop the launch agent and remove its autostart definition.
+awp autostart disable \
+  --session-id ses_01JABC123 \
+  --json
+```
+
+`autostart enable` copies the token from the configured environment variable into a separate local file with mode `0600`, because `launchd` does not inherit an interactive shell's environment. The token is never embedded in the plist or the main configuration. `autostart disable` intentionally leaves that protected token file in place because another session may use it. Running `enable` again updates the paths, token, and launch definition.
+
+On platforms without an autostart adapter, `awp connect --reconnect` remains available for systemd, containers, or another process supervisor. Native Linux service management is planned.
+
 The bearer token is not written to the configuration file. `token_env` contains only the name of the environment variable that holds it.
 
 The mapping from an AWP `session_id` to the Codex runtime session remains in the local `sessions.json` registry and is never sent to the AWP Service. On delivery, the adapter invokes:
@@ -242,7 +282,9 @@ The main open design questions are:
 - [ ] Build a reference AWP Service
 - [x] Build an AWP Client MVP
 - [x] Build a Codex CLI adapter
+- [x] Add reconnect/backoff and opt-in macOS autostart
 - [ ] Build a Claude Code adapter
+- [ ] Add native Linux systemd autostart
 - [ ] Add the first Sinores integration
 - [ ] Publish interoperability tests
 
