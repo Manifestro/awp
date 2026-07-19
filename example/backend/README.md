@@ -2,6 +2,8 @@
 
 A protocol-aware FastAPI implementation of an AWP Service MVP. It exists for interoperability development and local end-to-end tests with the Go client.
 
+This is a local transport example. Before implementing a durable or production AWP Service, read the full [backend implementation guide](../../docs/HOW_TO_CREATE_AWP_BACKEND.md).
+
 The example implements:
 
 - authenticated WebSocket connections at `/ws`;

@@ -5,6 +5,8 @@ Protocol version: `0.1`
 
 This document defines the first common wire format between an AWP Event Server, AWP Service, and AWP Client.
 
+For a backend implementation guide covering persistence, retries, scaling, security, and conformance testing, see [HOW_TO_CREATE_AWP_BACKEND.md](./HOW_TO_CREATE_AWP_BACKEND.md).
+
 ## Transport
 
 AWP messages are JSON objects. The same envelope is used over WebSocket and HTTP.

@@ -178,7 +178,7 @@ AWP complements MCP rather than replacing it:
 
 ## Current work
 
-The conceptual draft is being developed in [AWP.md](./AWP.md). The first client/server wire format and ready-to-use JSON fixtures are documented in [docs/PROTOCOL.md](./docs/PROTOCOL.md) and [`docs/examples`](./docs/examples) in the canonical [Manifestro/awp](https://github.com/Manifestro/awp) repository.
+The conceptual draft is being developed in [AWP.md](./AWP.md). The first client/server wire format and ready-to-use JSON fixtures are documented in [docs/PROTOCOL.md](./docs/PROTOCOL.md) and [`docs/examples`](./docs/examples). Backend implementers should use [docs/HOW_TO_CREATE_AWP_BACKEND.md](./docs/HOW_TO_CREATE_AWP_BACKEND.md) for the complete service lifecycle, persistence, retry, scaling, security, and compatibility requirements.
 
 An early Go client foundation is also available. Its configuration commands are non-interactive and support stable JSON output so coding agents can configure and inspect the client directly:
 
