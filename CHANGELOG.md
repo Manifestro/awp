@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0-alpha.1
 
 - Add a `{mcp_tools_prefixed_csv}` placeholder to the generic `command` adapter, formatting granted MCP tool names as `mcp__<mcp_server>__<tool>,...` for `--allowedTools`-style flags. Found live: Claude Code's headless `-p` resume has no interactive prompt to approve an MCP tool call, so without this the resumed session could wake but not actually call any provider tool.
 
