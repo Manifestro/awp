@@ -23,8 +23,13 @@ type Binding struct {
 	RuntimeSessionID string         `json:"runtime_session_id"`
 	Workspace        string         `json:"workspace,omitempty"`
 	Metadata         map[string]any `json:"metadata,omitempty"`
-	CreatedAt        string         `json:"created_at"`
-	UpdatedAt        string         `json:"updated_at"`
+	// ResumeCommand is an argv template for the generic "command" adapter
+	// (see internal/adapters/command): when set, it is executed instead of
+	// the hardcoded Codex invocation, so any CLI runtime can register itself
+	// via the local MCP server's set_awp tool without a new adapter package.
+	ResumeCommand []string `json:"resume_command,omitempty"`
+	CreatedAt     string   `json:"created_at"`
+	UpdatedAt     string   `json:"updated_at"`
 }
 
 type Registry struct {
@@ -129,8 +134,17 @@ func Bind(registry *Registry, binding Binding) (Binding, error) {
 	if strings.TrimSpace(binding.Adapter) == "" {
 		return Binding{}, errors.New("adapter is required")
 	}
-	if binding.Adapter != "codex" {
-		return Binding{}, fmt.Errorf("unsupported adapter %q", binding.Adapter)
+	// A binding with no resume_command uses the hardcoded, built-in Codex
+	// invocation, so its adapter name must actually be "codex". A binding
+	// with a resume_command runs through the generic command adapter
+	// instead; its adapter name is just a descriptive label at that point.
+	if len(binding.ResumeCommand) == 0 && binding.Adapter != "codex" {
+		return Binding{}, fmt.Errorf("unsupported adapter %q (set resume_command to register a custom runtime)", binding.Adapter)
+	}
+	for _, token := range binding.ResumeCommand {
+		if strings.ContainsAny(token, "\r\n") {
+			return Binding{}, errors.New("resume_command tokens must not contain newlines")
+		}
 	}
 	if strings.TrimSpace(binding.RuntimeSessionID) == "" {
 		return Binding{}, errors.New("runtime_session_id is required")

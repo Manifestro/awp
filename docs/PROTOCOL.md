@@ -127,7 +127,9 @@ A client MAY send multiple `session.bind` messages on the same provider connecti
 
 ### 4. Permission request
 
-After `session.bound` and before any delivery for that session, the provider MUST send `permission.request`. The request declares the minimum background capabilities and provider MCP tools that may be needed when the session wakes.
+After `session.bound` and before any delivery for that session, a fully-featured provider SHOULD send `permission.request`. The request declares the minimum background capabilities and provider MCP tools that may be needed when the session wakes.
+
+This is a recommendation, not a hard requirement for interoperability: a client MAY also grant `runtime.wake` (and specific provider MCP tool names the user already knows) locally, without ever receiving a `permission.request`, so a provider that has not implemented this message does not block its users from being woken. A provider that implements it properly still gets something the local-only path cannot offer: per-permission title/risk/description shown to the human, provider-defined tool scoping instead of one flat list, and definition-change detection (see below). See [PERMISSIONS.md](./PERMISSIONS.md#local-grants-without-a-provider-request) for the local grant mechanism.
 
 ```json
 {

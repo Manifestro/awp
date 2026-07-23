@@ -69,6 +69,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runAutostart(args[1:], stdout, stderr)
 	case "daemon":
 		return runDaemon(args[1:], stdout, stderr)
+	case "mcp":
+		return runMCP(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 		printUsage(stderr)
@@ -524,6 +526,10 @@ Usage:
   awp sessions bind --provider <name> --session-id <id> --adapter codex --runtime-session-id <id> [--workspace <path>] [--metadata-json <object>] [--json]
   awp sessions list [--provider <name>] [--json]
   awp sessions remove --provider <name> --session-id <id> [--json]
+  awp sessions remove --all [--provider <name>] [--json]
+  awp sessions pause --provider <name> --session-id <id> [--reason <text>] [--json]
+  awp sessions resume --provider <name> --session-id <id> [--json]
+  awp sessions status --provider <name> --session-id <id> [--json]
   awp permissions request --provider <name> --session-id <id> [--timeout 30s] [--json]
   awp permissions pending [--provider <name>] [--json]
   awp permissions grant --provider <name> --session-id <id> --allow <ids> [--scope once|binding|provider] [--json]
@@ -535,7 +541,11 @@ Usage:
   awp update auto enable [--interval-hours 24] [--json]
   awp update auto disable [--json]
   awp update auto status [--json]
-  awp daemon [--config <path>] [--store <path>] [--permissions-store <path>] [--token-dir <path>] [--once] [--timeout 30s] [--json]
+  awp daemon [--config <path>] [--store <path>] [--permissions-store <path>] [--events-store <path>] [--token-dir <path>] [--provider <name>] [--once] [--timeout 30s] [--json]
+  awp daemon start [--config <path>] [--store <path>] [--provider <name>] [--pid-file <path>] [--log-file <path>] [--json]
+  awp daemon stop [--config <path>] [--pid-file <path>] [--json]
+  awp daemon status [--config <path>] [--pid-file <path>] [--json]
+  awp mcp [--config <path>] [--store <path>] [--events-store <path>] [--workspace <path>]
   awp autostart enable [--start-now] [--json]
   awp autostart status [--json]
   awp autostart disable [--json]

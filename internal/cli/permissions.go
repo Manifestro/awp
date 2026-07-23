@@ -192,7 +192,8 @@ func runPermissionsGrant(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	provider := flags.String("provider", "", "AWP provider name")
 	sessionID := flags.String("session-id", "", "AWP session identifier whose request is being approved")
-	allow := flags.String("allow", "", "comma-separated requested permission IDs")
+	allow := flags.String("allow", "", "comma-separated permission IDs. If the provider has not sent a permission.request (most do not implement it), these are granted directly with no provider round-trip")
+	mcpTools := flags.String("mcp-tools", "", "comma-separated provider MCP tool names to enable; only used when there is no existing provider request")
 	scope := flags.String("scope", permissions.ScopeBinding, "grant scope: once, binding, or provider")
 	sessionStore := flags.String("store", "", "session registry file path")
 	common := addPermissionStoreFlags(flags)
@@ -217,7 +218,13 @@ func runPermissionsGrant(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return commandError("permissions.grant", "permissions_read", err, *common.jsonOutput, stdout, stderr)
 	}
-	grant, err := permissions.GrantPermissions(&store, *provider, *sessionID, *scope, splitCSV(*allow))
+	allowedIDs := splitCSV(*allow)
+	if _, found := permissions.GetRequest(store, *provider, *sessionID); !found {
+		if _, err := permissions.RequestLocal(&store, *provider, *sessionID, allowedIDs, splitCSV(*mcpTools)); err != nil {
+			return commandError("permissions.grant", "local_request_invalid", err, *common.jsonOutput, stdout, stderr)
+		}
+	}
+	grant, err := permissions.GrantPermissions(&store, *provider, *sessionID, *scope, allowedIDs)
 	if err != nil {
 		return commandError("permissions.grant", "grant_invalid", err, *common.jsonOutput, stdout, stderr)
 	}

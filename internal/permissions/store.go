@@ -237,6 +237,38 @@ func RecordRequest(store *Store, request Request) (Request, error) {
 	return request, nil
 }
 
+// LocalRequestID marks a Request that AWP authored itself, as opposed to one
+// relayed from a provider's own permission.request message.
+const LocalRequestID = "local"
+
+// RequestLocal creates or replaces a permission request authored by AWP
+// itself rather than by the provider, so a session can be granted runtime.wake
+// (and, if the caller already knows the provider's own MCP tool names,
+// specific tools) without requiring every provider to implement the
+// permission.request handshake. GrantPermissions still requires a Request to
+// exist; this is what lets the client supply one when the provider never
+// sends one. runtime.wake is always included, since a grant requires it.
+//
+// This is deliberately coarser than a provider-authored request: there is no
+// per-permission title/description/risk reasoning from the provider, and
+// mcpTools is shared across every non-runtime.wake id rather than scoped
+// individually. A provider that wants that precision should implement
+// permission.request instead.
+func RequestLocal(store *Store, provider, sessionID string, allow, mcpTools []string) (Request, error) {
+	ids := uniqueSorted(append([]string{RuntimeWake}, allow...))
+	items := make([]RequestedPermission, 0, len(ids))
+	for _, id := range ids {
+		permission := RequestedPermission{ID: id, Title: id, Risk: "read", Delegation: DelegationBackground}
+		if id == RuntimeWake {
+			permission.Risk = "runtime"
+		} else {
+			permission.MCPTools = mcpTools
+		}
+		items = append(items, permission)
+	}
+	return RecordRequest(store, Request{Provider: provider, SessionID: sessionID, RequestID: LocalRequestID, Permissions: items})
+}
+
 func GrantPermissions(store *Store, provider, sessionID, scope string, allowed []string) (Grant, error) {
 	request, found := GetRequest(*store, provider, sessionID)
 	if !found {

@@ -225,7 +225,7 @@ One connection to this provider may bind multiple sessions. The provider MUST su
 
 ### 4.4 Permission request
 
-Immediately after `session.bound`, the provider MUST send `permission.request` for that session. It MUST do so before delivering new or queued events:
+Immediately after `session.bound`, a fully-featured provider SHOULD send `permission.request` for that session, before delivering new or queued events. This message is RECOMMENDED, not required for interoperability: the reference client also supports granting `runtime.wake` (and specific MCP tool names the user already knows) locally, with no message from the provider at all, so a backend that skips this section still works end to end — it just loses the per-permission reasoning, provider-defined tool scoping, and definition-change detection described below and in [PERMISSIONS.md](./PERMISSIONS.md#local-grants-without-a-provider-request).
 
 ```json
 {
@@ -715,7 +715,7 @@ A practical build order is:
 2. separate client and publisher authentication;
 3. authenticated WebSocket with hello/welcome;
 4. durable session binding;
-5. mandatory permission request after binding;
+5. permission request after binding (recommended; the client can grant `runtime.wake` locally without it, see 4.4);
 6. transactional HTTP event publication and idempotency;
 7. online `event.deliver`;
 8. offline pending queue;
@@ -736,8 +736,7 @@ Before calling a backend AWP `0.1` compatible, test at least:
 - hello receives welcome with matching `device_id`;
 - clients without `capabilities.permissions=true` receive `upgrade_required`;
 - same-device reconnect replaces or safely supersedes the old socket;
-- every bound session receives `permission.request` before any delivery;
-- permission requests include valid `runtime.wake` and are resent after reconnect;
+- if your backend sends `permission.request`, every bound session receives it before any delivery, and requests include valid `runtime.wake` and are resent after reconnect;
 - session binding is idempotent for the same owner;
 - cross-device and cross-tenant session rebinding fails;
 - publisher cannot target resources outside its scope;

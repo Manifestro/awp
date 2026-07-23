@@ -110,7 +110,7 @@ awp sessions bind \
 
 ### 3. Review provider permissions
 
-The provider must request permission before AWP can wake the session. Fetch the signed-in provider's request and grant only what this binding needs:
+If the provider sends a `permission.request`, fetch it and grant only what this binding needs:
 
 ```bash
 awp permissions request \
@@ -124,7 +124,18 @@ awp permissions grant \
   --scope binding
 ```
 
-AWP stores the grant locally and never edits `~/.codex/config.toml`. On every wake, the Codex adapter creates a one-run MCP tool allowlist. Ungranted tools remain unavailable to that background invocation.
+Most providers will not implement that handshake, at least not yet — that's fine. Grant `runtime.wake` (and any of the provider's own MCP tool names you already know) directly instead; AWP records the grant locally without a provider round-trip:
+
+```bash
+awp permissions grant \
+  --provider sinores \
+  --session-id ses_support \
+  --allow runtime.wake,messages.read_new \
+  --mcp-tools get_new_messages \
+  --scope binding
+```
+
+AWP stores the grant locally and never edits `~/.codex/config.toml`. On every wake, the runtime adapter creates a one-run MCP tool allowlist from that grant. Ungranted tools remain unavailable to that background invocation. See [the permission model](./docs/PERMISSIONS.md) for details, and [the local grant fallback](./docs/PERMISSIONS.md#local-grants-without-a-provider-request) specifically.
 
 ### 4. Validate and run
 

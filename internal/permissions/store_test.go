@@ -14,6 +14,46 @@ func testRequest() Request {
 	}}
 }
 
+func TestRequestLocalAllowsGrantWithoutAProviderRequest(t *testing.T) {
+	store := NewStore()
+	if _, found := GetRequest(store, "sinores", "ses_test"); found {
+		t.Fatal("no request should exist yet")
+	}
+	if _, err := RequestLocal(&store, "sinores", "ses_test", []string{"messages.read_new"}, []string{"get_new_messages"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GrantPermissions(&store, "sinores", "ses_test", ScopeBinding, []string{RuntimeWake, "messages.read_new"}); err != nil {
+		t.Fatal(err)
+	}
+	authorization, err := Authorize(&store, "sinores", "ses_test", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(authorization.MCPTools) != 1 || authorization.MCPTools[0] != "get_new_messages" {
+		t.Fatalf("authorization = %#v", authorization)
+	}
+}
+
+func TestRequestLocalAlwaysIncludesRuntimeWake(t *testing.T) {
+	store := NewStore()
+	request, err := RequestLocal(&store, "sinores", "ses_test", []string{"messages.read_new"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, permission := range request.Permissions {
+		if permission.ID == RuntimeWake {
+			found = true
+			if len(permission.MCPTools) != 0 {
+				t.Fatalf("runtime.wake must not carry mcp_tools: %#v", permission)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("RequestLocal did not include runtime.wake")
+	}
+}
+
 func TestGrantAuthorizeAndChangedManifest(t *testing.T) {
 	store := NewStore()
 	if _, err := RecordRequest(&store, testRequest()); err != nil {

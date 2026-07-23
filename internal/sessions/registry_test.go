@@ -53,3 +53,28 @@ func TestBindRejectsUnsupportedAdapter(t *testing.T) {
 		t.Fatal("Bind() accepted unsupported adapter")
 	}
 }
+
+func TestBindAcceptsCustomAdapterWithResumeCommand(t *testing.T) {
+	registry := NewRegistry()
+	binding, err := Bind(&registry, Binding{
+		Provider: "example", SessionID: "ses", Adapter: "claude-code", RuntimeSessionID: "runtime",
+		ResumeCommand: []string{"claude", "-r", "{runtime_session_id}", "-p", "{prompt}"},
+	})
+	if err != nil {
+		t.Fatalf("Bind() rejected a custom adapter with a resume_command: %v", err)
+	}
+	if len(binding.ResumeCommand) != 5 {
+		t.Fatalf("binding.ResumeCommand = %#v", binding.ResumeCommand)
+	}
+}
+
+func TestBindRejectsResumeCommandWithNewlines(t *testing.T) {
+	registry := NewRegistry()
+	_, err := Bind(&registry, Binding{
+		Provider: "example", SessionID: "ses", Adapter: "claude-code", RuntimeSessionID: "runtime",
+		ResumeCommand: []string{"claude", "-r\nrm -rf /"},
+	})
+	if err == nil {
+		t.Fatal("Bind() accepted a resume_command token containing a newline")
+	}
+}

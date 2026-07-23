@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,33 +9,23 @@ import (
 	"os/exec"
 	"strconv"
 
+	execrunner "github.com/Manifestro/awp/internal/adapters/exec"
 	"github.com/Manifestro/awp/internal/events"
 	"github.com/Manifestro/awp/internal/permissions"
 	"github.com/Manifestro/awp/internal/protocol"
 	"github.com/Manifestro/awp/internal/sessions"
 )
 
-type Runner interface {
-	Run(ctx context.Context, command string, args []string, directory string, stdin []byte, output io.Writer) error
-}
+// ErrBindingUnusable re-exports the shared sentinel from internal/adapters/exec
+// (see its doc comment) so existing references to codex.ErrBindingUnusable
+// keep compiling unchanged.
+var ErrBindingUnusable = execrunner.ErrBindingUnusable
 
-type CommandRunner struct{}
-
-func (CommandRunner) Run(
-	ctx context.Context,
-	command string,
-	args []string,
-	directory string,
-	stdin []byte,
-	output io.Writer,
-) error {
-	process := exec.CommandContext(ctx, command, args...)
-	process.Dir = directory
-	process.Stdin = bytes.NewReader(stdin)
-	process.Stdout = output
-	process.Stderr = output
-	return process.Run()
-}
+// Runner and CommandRunner are aliases of the shared process-execution
+// primitive in internal/adapters/exec; kept here so existing references to
+// codex.Runner / codex.CommandRunner keep compiling unchanged.
+type Runner = execrunner.Runner
+type CommandRunner = execrunner.CommandRunner
 
 type Adapter struct {
 	Binary string
@@ -56,15 +45,15 @@ func (adapter *Adapter) Run(ctx context.Context, binding sessions.Binding, deliv
 		return fmt.Errorf("Codex runtime session id is required")
 	}
 	if _, err := exec.LookPath(adapter.Binary); err != nil {
-		return fmt.Errorf("find Codex CLI: %w", err)
+		return fmt.Errorf("find Codex CLI: %w: %w", err, ErrBindingUnusable)
 	}
 	if binding.Workspace != "" {
 		info, err := os.Stat(binding.Workspace)
 		if err != nil {
-			return fmt.Errorf("open Codex workspace: %w", err)
+			return fmt.Errorf("open Codex workspace: %w: %w", err, ErrBindingUnusable)
 		}
 		if !info.IsDir() {
-			return fmt.Errorf("Codex workspace is not a directory: %s", binding.Workspace)
+			return fmt.Errorf("Codex workspace is not a directory: %s: %w", binding.Workspace, ErrBindingUnusable)
 		}
 	}
 	prompt, err := events.FormatPrompt(delivery)
