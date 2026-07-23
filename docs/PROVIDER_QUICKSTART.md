@@ -33,7 +33,7 @@ wss://your-product.example/awp ─────────▶ AWP client
                                         agent session
 ```
 
-There is no Manifestro relay or shared AWP server. You operate the endpoint and retain your own events. Your backend never needs to know which agent runtime the user is running (Claude Code, Codex, or anything else) — that choice, and everything runtime-specific, stays entirely on the user's machine. See [Runtime independence](#runtime-independence-you-never-need-to-know-what-agent-the-user-runs) below.
+You operate the endpoint and retain your own events. Your backend never needs to know which agent runtime the user is running (Claude Code, Codex, or anything else) — that choice, and everything runtime-specific, stays entirely on the user's machine. See [Runtime independence](#runtime-independence-you-never-need-to-know-what-agent-the-user-runs) below.
 
 ## Protocol at a glance
 

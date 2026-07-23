@@ -22,7 +22,7 @@ Local AWP Client ◀── wss://provider.example/awp
        └── locally resumes Codex, Claude Code, or another runtime
 ```
 
-Different products operate different endpoints. Sinores does not publish through a shared GitHub or Manifestro relay, and another provider does not publish through Sinores.
+Different products operate different endpoints; one provider's events never pass through another's.
 
 The backend MUST:
 
